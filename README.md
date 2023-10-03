@@ -102,14 +102,14 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --read-object --type pubkey
 ### ECDSA - Sign Operation (On hash data)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --label sss:0xEF000001 --input-file scripts/input/data32.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --label sss:0xEF000001 --input-file scripts/input_data/data32.txt -o out.sign
 
 ```
 
 ### ECDSA - Sign Operation (On raw input)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --label sss:0xEF000001 --input-file scripts/input/data1024.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --label sss:0xEF000001 --input-file scripts/input_data/data1024.txt -o out.sign
 
 ```
 
