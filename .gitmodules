@@ -1,0 +1,6 @@
+[submodule "simw_lib"]
+	path = simw_lib
+	url = https://github.com/NXP/plug-and-trust.git
+[submodule "pkcs11"]
+	path = pkcs11
+	url = https://github.com/oasis-tcs/pkcs11.git
