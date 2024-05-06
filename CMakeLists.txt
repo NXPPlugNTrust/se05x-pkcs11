@@ -11,13 +11,22 @@ SET(SIMW_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/simw_lib)
 
 INCLUDE(${SIMW_LIB_DIR}/simw_lib.cmake)
 
-FILE(
-    GLOB
-    files
-    se_pkcs11/${PROJECT_NAME}.c
-    ${SIMW_SE_SOURCES}
-)
-
+IF("${PTMW_SE05X_Auth}" STREQUAL "None")
+    FILE(
+        GLOB
+        files
+        se_pkcs11/${PROJECT_NAME}.c
+        ${SIMW_SE_SOURCES}
+    )
+ELSE()
+    FILE(
+        GLOB
+        files
+        se_pkcs11/${PROJECT_NAME}.c
+        ${SIMW_SE_SOURCES}
+        ${SIMW_SE_AUTH_SOURCES}
+    )
+ENDIF()
 FILE(
     GLOB
     pkcs11_files
@@ -32,6 +41,7 @@ TARGET_INCLUDE_DIRECTORIES(
     se_pkcs11/
     pkcs11/published/2-40-errata-1
     ${SIMW_INC_DIR}
+    /usr/local/include/se05x/
     )
 
 ADD_DEFINITIONS(-DPKCS11_LIBRARY)

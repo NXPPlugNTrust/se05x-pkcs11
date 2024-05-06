@@ -1,10 +1,16 @@
 /*
- * Copyright 2021 NXP
+ * Copyright 2021,2024 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /* ********************** Include files ********************** */
 #include "sss_pkcs11_pal.h"
+
+/* ********************** Global variables ********************** */
+/* Object Cache should only be used for the platforms which don't have any memory constraints */
+#if ENABLE_OBJECT_CACHE
+sss_object_t cache_sssObjects[MAX_CACHE_OBJECT];
+#endif
 
 /* ********************** Local Defines ********************** */
 
@@ -17,9 +23,8 @@
 // CKA_OPENSC_NON_REPUDIATION for OpenSC 0.21
 #define CKA_OPENSC_NON_REPUDIATION_0_21 (CKA_VENDOR_DEFINED | SC_VENDOR_DEFINED | 1UL)
 
-/* ********************** Public Functions ********************** */
-
 extern CK_RV pkcs11_read_object_size(uint32_t keyId, uint16_t *keyLen);
+extern bool cryptokiInitialized;
 
 /**
  * @brief Free resources attached to an object handle.
@@ -27,24 +32,37 @@ extern CK_RV pkcs11_read_object_size(uint32_t keyId, uint16_t *keyLen);
 CK_DEFINE_FUNCTION(CK_RV, C_DestroyObject)
 (CK_SESSION_HANDLE xSession, CK_OBJECT_HANDLE xObject)
 {
-    (void)(xSession);
     LOG_D("%s", __FUNCTION__);
 
-    CK_RV xResult           = CKR_FUNCTION_FAILED;
-    sss_status_t sss_status = kStatus_SSS_Fail;
-    sss_object_t object     = {0};
+    CK_RV xResult                      = CKR_FUNCTION_FAILED;
+    sss_status_t sss_status            = kStatus_SSS_Fail;
+    sss_object_t object                = {0};
+    sss_se05x_session_t *se05x_session = (sss_se05x_session_t *)(&(pex_sss_demo_boot_ctx->session));
+    SE05x_Result_t IdExists            = kSE05x_Result_NA;
+    P11SessionPtr_t pxSession          = prvSessionPointerFromHandle(xSession);
 
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pxSession, CKR_SESSION_HANDLE_INVALID);
+
+    ENSURE_OR_RETURN_ON_ERROR(xObject != 0, CKR_OK);
     ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_pkcs11_mutex_lock() == 0, xResult, CKR_CANT_LOCK);
-
-    sss_status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
-    ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-
     ENSURE_OR_GO_EXIT(xObject <= UINT32_MAX);
-    sss_status = sss_key_object_get_handle(&object, (uint32_t)xObject);
-    ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
-    sss_status = sss_key_store_erase_key(&pex_sss_demo_boot_ctx->ks, &object);
-    ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+    if (SM_OK == Se05x_API_CheckObjectExists(&se05x_session->s_ctx, (uint32_t)xObject, &IdExists)) {
+        if (IdExists == kSE05x_Result_SUCCESS) {
+            sss_status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+            sss_status = sss_key_object_get_handle(&object, (uint32_t)xObject);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+            sss_status = sss_key_store_erase_key(&pex_sss_demo_boot_ctx->ks, &object);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        }
+    }
+    else {
+        LOG_E("Se05x_API_CheckObjectExists failed !!!");
+        goto exit;
+    }
 
     xResult = CKR_OK;
 exit:
@@ -61,7 +79,6 @@ exit:
 CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
 (CK_SESSION_HANDLE xSession, CK_ATTRIBUTE_PTR pxTemplate, CK_ULONG ulCount, CK_OBJECT_HANDLE_PTR pxObject)
 {
-    AX_UNUSED_ARG(xSession);
     CK_RV xResult = CKR_FUNCTION_FAILED;
     LOG_D("%s", __FUNCTION__);
     sss_pkcs11_key_parse_t keyParse = {0};
@@ -79,21 +96,29 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     sss_key_part_t keyPart       = kSSS_KeyPart_NONE;
     CK_KEY_TYPE key_type;
     CK_ULONG index;
-    sss_object_t tmp_object = {0};
-
-    keyParse.pbuff = &buff[0];
+    sss_object_t tmp_object            = {0};
+    sss_se05x_session_t *se05x_session = (sss_se05x_session_t *)(&(pex_sss_demo_boot_ctx->session));
+    SE05x_Result_t IdExists            = kSE05x_Result_NA;
+    keyParse.pbuff                     = &buff[0];
+    size_t keyLen                      = 0;
+    sss_rng_context_t sss_rng_ctx      = {0};
+    uint8_t randomKey[32]              = {0};
+    sss_object_t secretObject          = {0};
 
     /*
      * Check parameters.
      */
-    ENSURE_OR_RETURN_ON_ERROR(pkcs11CREATEOBJECT_MINIMUM_ATTRIBUTE_COUNT <= ulCount, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(xSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
+    ENSURE_OR_RETURN_ON_ERROR(pkcs11CREATEOBJECT_MINIMUM_ATTRIBUTE_COUNT <= ulCount, CKR_TEMPLATE_INCOMPLETE);
     ENSURE_OR_RETURN_ON_ERROR(pxTemplate != NULL, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(pxObject != NULL, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(ulCount != (CK_ULONG)-1, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
     ENSURE_OR_RETURN_ON_ERROR(
         pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_CLASS, &classIndex) == CKR_OK,
-        CKR_FUNCTION_FAILED);
+        CKR_TEMPLATE_INCOMPLETE);
 
     /*Find the key id as it's needed while provisiong keys and certificate*/
     if (pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_SSS_ID, &keyidindex) == CKR_OK) {
@@ -104,7 +129,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
      * Handle the object by class.
      */
     switch (*((uint32_t *)pxTemplate[classIndex].pValue)) {
-    case CKO_CERTIFICATE: {
+    case CKO_CERTIFICATE:
+    case CKO_DATA: {
         ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_VALUE, &i) == CKR_OK);
 
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pxTemplate[i].ulValueLen < buff_len, xResult, CKR_HOST_MEMORY);
@@ -123,7 +149,14 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
                             pxTemplate[labelIndex].pValue, pxTemplate[labelIndex].ulValueLen, &keyId) == CKR_OK);
                 }
             }
-            ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pkcs11_parse_Cert(&buff[0], buff_len) == 0, xResult, CKR_ARGUMENTS_BAD);
+
+            if (*((uint32_t *)pxTemplate[classIndex].pValue) == CKO_CERTIFICATE) {
+                ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
+                    pkcs11_parse_Cert(&buff[0], buff_len) == 0, xResult, CKR_ARGUMENTS_BAD);
+            }
+            else {
+                //Do nothing for data object. Create binary file.
+            }
 
             status = pkcs11_sss_create_token(&pex_sss_demo_boot_ctx->ks,
                 &tmp_object,
@@ -224,16 +257,40 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
         index = 0;
         ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_KEY_TYPE, &index) == CKR_OK);
         memcpy(&key_type, pxTemplate[index].pValue, pxTemplate[index].ulValueLen);
-        /* Check for HMAC Keytype */
-        if (key_type == CKK_SHA256_HMAC) {
+        /* Treating generic keytype as HMAC only */
+        if ((key_type == CKK_GENERIC_SECRET) || (key_type == CKK_SHA_1_HMAC) || (key_type == CKK_SHA224_HMAC) ||
+            (key_type == CKK_SHA256_HMAC) || (key_type == CKK_SHA384_HMAC) || (key_type == CKK_SHA512_HMAC)) {
             cipherType = kSSS_CipherType_HMAC;
         }
-        else {
+        else if (key_type == CKK_AES) {
             cipherType = kSSS_CipherType_AES;
         }
+        else if ((key_type == CKK_DES) || (key_type == CKK_DES3) || (key_type == CKK_DES2)) {
+            cipherType = kSSS_CipherType_DES;
+        }
+        else {
+            LOG_E("Key_type 0x%X is not supported", key_type);
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        /* Checking and deleting the key if already present */
+        if (SM_OK == Se05x_API_CheckObjectExists(&se05x_session->s_ctx, keyId, &IdExists)) {
+            if ((IdExists == kSE05x_Result_SUCCESS) &&
+                ((cipherType == kSSS_CipherType_HMAC) || (cipherType == kSSS_CipherType_AES) ||
+                    (cipherType == kSSS_CipherType_DES))) {
+                LOG_W("Key id 0x%X already exists!!", keyId);
+                ENSURE_OR_GO_EXIT(SM_OK == Se05x_API_DeleteSecureObject(&se05x_session->s_ctx, keyId));
+            }
+        }
+        else {
+            LOG_E("Se05x_API_CheckObjectExists Failed !!");
+            goto exit;
+        }
+
         if (0 != pxTemplate[i].ulValueLen) {
-            sss_object_t secretObject = {0};
             ENSURE_OR_GO_EXIT((pxTemplate[i].ulValueLen) <= (UINT32_MAX / 8));
+
             status = pkcs11_sss_create_token(&pex_sss_demo_boot_ctx->ks,
                 &secretObject,
                 keyId,
@@ -245,14 +302,69 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
             ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
             *pxObject = keyId;
         }
+        else { /* Key value is not provided, generate a random key */
+
+            switch (key_type) {
+            case CKK_GENERIC_SECRET:
+            case CKK_AES:
+                keyLen = 16;
+                LOG_W("Keylength used:%lu", keyLen);
+                break;
+            case CKK_DES:
+                keyLen = 8;
+                LOG_W("Keylength used:%lu", keyLen);
+                break;
+            case CKK_DES2:
+                keyLen = 16;
+                LOG_W("Keylength used:%lu", keyLen);
+                break;
+            case CKK_DES3:
+                keyLen = 24;
+                LOG_W("Keylength used:%lu", keyLen);
+                break;
+            default:
+                LOG_E("Key_type 0x%X is not supported", key_type);
+                xResult = CKR_ARGUMENTS_BAD;
+                goto exit;
+            }
+            /* Generate random data */
+
+            status = sss_rng_context_init(&sss_rng_ctx, &pex_sss_demo_boot_ctx->session);
+            if (status != kStatus_SSS_Success) {
+                xResult = CKR_DEVICE_ERROR;
+                goto exit;
+            }
+            status = sss_rng_get_random(&sss_rng_ctx, randomKey, keyLen);
+            if (status != kStatus_SSS_Success) {
+                xResult = CKR_DEVICE_ERROR;
+                goto exit;
+            }
+
+            /* Import secret key */
+            status = pkcs11_sss_create_token(&pex_sss_demo_boot_ctx->ks,
+                &secretObject,
+                keyId,
+                kSSS_KeyPart_Default,
+                cipherType,
+                randomKey,
+                keyLen,
+                keyLen * 8);
+            ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+            *pxObject = keyId;
+        }
         break;
     }
     default:
         goto exit;
     }
-
-    xResult = CKR_OK;
+    xResult              = CKR_OK;
 exit:
+    if (sss_rng_ctx.session != NULL) {
+        sss_rng_context_free(&sss_rng_ctx);
+    }
+    if (sss_pkcs11_mutex_unlock() != 0) {
+        return CKR_FUNCTION_FAILED;
+    }
     return xResult;
 }
 
@@ -268,6 +380,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjectsInit)
     CK_ULONG i                = 0;
     LOG_D("%s", __FUNCTION__);
 
+    ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
     ENSURE_OR_RETURN_ON_ERROR(pxSession != NULL, CKR_SESSION_HANDLE_INVALID);
 
     /*
@@ -288,6 +401,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjectsInit)
 
     for (i = 0; i < ulCount; i++) {
         if (pxTemplate[i].type == CKA_LABEL) {
+            LOG_D("Label found \n");
             pxSession->labelPresent = CK_TRUE;
             if (snprintf(pxSession->label, sizeof(pxSession->label), "%s", (char *)pxTemplate[i].pValue) < 0) {
                 LOG_E("snprintf error");
@@ -322,255 +436,190 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjectsInit)
 CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
 (CK_SESSION_HANDLE xSession, CK_OBJECT_HANDLE_PTR pxObject, CK_ULONG ulMaxObjectCount, CK_ULONG_PTR pulObjectCount)
 {
-    CK_RV xResult             = CKR_OK;
-    bool xDone                = false;
-    P11SessionPtr_t pxSession = prvSessionPointerFromHandle(xSession);
-    uint32_t keyId            = 0x0;
+    CK_RV xResult                  = CKR_FUNCTION_FAILED;
+    bool xDone                     = false;
+    P11SessionPtr_t pxSession      = prvSessionPointerFromHandle(xSession);
+    uint32_t keyId                 = 0x0;
+    CK_OBJECT_HANDLE_PTR ckObjects = NULL;
+    sss_status_t status            = kStatus_SSS_Fail;
 
     LOG_D("%s", __FUNCTION__);
 
     // Check parameters.
-    if (pxSession == NULL) {
-        xResult = CKR_SESSION_HANDLE_INVALID;
-        return xResult;
-    }
-
-    if ((CK_BBOOL)CK_FALSE == pxSession->xFindObjectInit) {
-        xResult = CKR_OPERATION_NOT_INITIALIZED;
-        return xResult;
-    }
-
-    if ((false == xDone) && (0u == ulMaxObjectCount)) {
-        xResult = CKR_ARGUMENTS_BAD;
-        xDone   = true;
-        return xResult;
-    }
-
-    if ((false == xDone) && (!pxObject || !pulObjectCount)) {
-        xResult = CKR_ARGUMENTS_BAD;
-        xDone   = true;
-        return xResult;
-    }
+    ENSURE_OR_RETURN_ON_ERROR(pxSession != NULL, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR((CK_BBOOL)CK_FALSE != pxSession->xFindObjectInit, CKR_OPERATION_NOT_INITIALIZED);
+    ENSURE_OR_RETURN_ON_ERROR(!((false == xDone) && (0u == ulMaxObjectCount)), CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(!((false == xDone) && (!pxObject || !pulObjectCount)), CKR_ARGUMENTS_BAD);
 
     /*
-     * Load object based on whether label / keyId was passed.
+     * Implementation Logic - Load object based on whether label / keyId was passed.
      * If neither was passed while initializing FindObjects operation
      * then we list the objects present on the secure element and filter
      * out based on object type required by the application.
      */
-    if ((false == xDone) && pxSession->labelPresent) {
-        if (pxSession->labelLen == 0) {
+
+    if (sss_pkcs11_mutex_lock() != 0) {
+        return CKR_CANT_LOCK;
+    }
+
+    if ((false == xDone) && pxSession->labelPresent) /* If find object is with label */
+    {
+        sss_object_t object = {0};
+
+        ENSURE_OR_GO_EXIT(pxSession->labelLen != 0);
+        if (pxSession->xFindObjectTotalFound == 1) {
             *pulObjectCount = 0;
-            xResult         = CKR_FUNCTION_FAILED;
         }
         else {
-            if (pxSession->xFindObjectTotalFound == 1) {
-                *pulObjectCount = 0;
-            }
-            else {
-                xResult = pkcs11_label_to_keyId((unsigned char *)pxSession->label, pxSession->labelLen, &keyId);
-                if (xResult == CKR_OK) {
-                    sss_status_t status = kStatus_SSS_Fail;
-                    sss_object_t object = {0};
-                    if (sss_pkcs11_mutex_lock() != 0) {
-                        xResult = CKR_CANT_LOCK;
-                        return xResult;
-                    }
-                    status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
-                    if (status != kStatus_SSS_Success) {
-                        xResult = CKR_FUNCTION_FAILED;
-                    }
-                    else {
-                        status = sss_key_object_get_handle(&object, keyId);
-                        if (status != kStatus_SSS_Success) {
-                            *pulObjectCount = 0;
-                        }
-                        else {
-                            *pxObject                        = keyId;
-                            *pulObjectCount                  = 1;
-                            pxSession->xFindObjectTotalFound = 1;
+            xResult = pkcs11_label_to_keyId((unsigned char *)pxSession->label, pxSession->labelLen, &keyId);
+            ENSURE_OR_GO_EXIT(xResult == CKR_OK);
 
-                            pxSession->pCurrentKs = (SwKeyStorePtr_t)SSS_MALLOC(sizeof(SwKeyStore_t));
-                            memset(pxSession->pCurrentKs, 0, sizeof(SwKeyStore_t));
-                            memcpy(&pxSession->pCurrentKs->SSSObjects[0],
-                                &object,
-                                sizeof(pxSession->pCurrentKs->SSSObjects[0]));
-                            pxSession->pCurrentKs->keyIdListLen = 1;
-                        }
-                    }
-                    if (sss_pkcs11_mutex_unlock() != 0) {
-                        return CKR_FUNCTION_FAILED;
-                    }
-                }
+            status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
+            if (status != kStatus_SSS_Success) {
+                xResult = CKR_FUNCTION_FAILED;
+                goto exit;
             }
+
+            status = sss_key_object_get_handle(&object, keyId);
+            if (status != kStatus_SSS_Success) {
+                /* Reset the count so that handle moves to next object */
+                *pulObjectCount = 0;
+                goto exit;
+            }
+
+            *pxObject                        = keyId;
+            *pulObjectCount                  = 1;
+            pxSession->xFindObjectTotalFound = 1;
+#if ENABLE_OBJECT_CACHE
+            memcpy(&cache_sssObjects[0], &object, sizeof(cache_sssObjects[0]));
+#endif
         }
-        xDone = true;
     }
-    else if ((false == xDone) && pxSession->keyIdPresent) {
+    else if ((false == xDone) && pxSession->keyIdPresent) /* If find object is with key id */
+    {
         keyId               = pxSession->keyId;
-        sss_status_t status = kStatus_SSS_Fail;
         sss_object_t object = {0};
 
         if (pxSession->xFindObjectTotalFound == 1) {
             *pulObjectCount = 0;
         }
         else {
-            if (sss_pkcs11_mutex_lock() != 0) {
-                xResult = CKR_CANT_LOCK;
-                return xResult;
-            }
             status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
             if (status != kStatus_SSS_Success) {
                 xResult = CKR_FUNCTION_FAILED;
+                goto exit;
             }
-            else {
-                status = sss_key_object_get_handle(&object, keyId);
-                if (status != kStatus_SSS_Success) {
-                    *pulObjectCount = 0;
-                }
-                else {
-                    *pxObject                        = keyId;
-                    *pulObjectCount                  = 1;
-                    pxSession->xFindObjectTotalFound = 1;
 
-                    pxSession->pCurrentKs = (SwKeyStorePtr_t)SSS_MALLOC(sizeof(SwKeyStore_t));
-                    memset(pxSession->pCurrentKs, 0, sizeof(SwKeyStore_t));
-                    memcpy(
-                        &pxSession->pCurrentKs->SSSObjects[0], &object, sizeof(pxSession->pCurrentKs->SSSObjects[0]));
-                    pxSession->pCurrentKs->keyIdListLen = 1;
-                }
+            status = sss_key_object_get_handle(&object, keyId);
+            if (status != kStatus_SSS_Success) {
+                /* Reset the count so that handle moves to the next object */
+                *pulObjectCount = 0;
+                goto exit;
             }
-            if (sss_pkcs11_mutex_unlock() != 0) {
+
+            *pxObject                        = keyId;
+            *pulObjectCount                  = 1;
+            pxSession->xFindObjectTotalFound = 1;
+#if ENABLE_OBJECT_CACHE
+            memcpy(&cache_sssObjects[0], &object, sizeof(cache_sssObjects[0]));
+#endif
+        }
+    }
+    else {
+        static uint32_t object_list[MAX_CACHE_OBJECT] = {0};
+        static size_t object_list_size   = MAX_CACHE_OBJECT;
+        size_t ulMaxObjectCountTmp       = ulMaxObjectCount;
+        size_t total_objs_reads          = 0;
+
+        do {
+            if (total_objs_reads >= MAX_CACHE_OBJECT) {
                 return CKR_FUNCTION_FAILED;
             }
-        }
 
-        xDone = true;
-    }
+            object_list_size = MAX_CACHE_OBJECT - total_objs_reads;
 
-    else if ((false == xDone)) {
-        if (MAX_ID_LIST_SIZE < ulMaxObjectCount) {
-            LOG_E("More than MAX_ID_LIST_SIZE objects requested");
-            xResult = CKR_ARGUMENTS_BAD;
-            xDone   = true;
-            return xResult;
-        }
-    retry:
-        xResult                                            = CKR_OK;
-        static uint32_t object_list[USER_MAX_ID_LIST_SIZE] = {0};
-        static size_t object_list_size                     = 0;
-
-        if (pxSession->xFindObjectOutputOffset % USER_MAX_ID_LIST_SIZE == 0) {
-            memset(object_list, 0, sizeof(object_list));
-            object_list_size     = sizeof(object_list) / sizeof(object_list[0]);
-            smStatus_t sm_status = pkcs11_read_id_list(xSession, object_list, &object_list_size, ulMaxObjectCount);
+            smStatus_t sm_status =
+                pkcs11_read_id_list(xSession, &object_list[total_objs_reads], &object_list_size, ulMaxObjectCountTmp);
             if (sm_status != SM_OK) {
                 *pulObjectCount = 0;
-                xResult         = CKR_OK;
                 xDone           = true;
-                return xResult;
+                return CKR_FUNCTION_FAILED;
             }
-            /* Read ID List was successful. Update SW Keystore for further operations */
-            if (pxSession->pCurrentKs == NULL){
-                pxSession->pCurrentKs = (SwKeyStorePtr_t)SSS_MALLOC(sizeof(SwKeyStore_t));
-            }
-            if (!pxSession->pCurrentKs) {
-                xResult = CKR_HOST_MEMORY;
-                xDone   = true;
-                return xResult;
-            }
-            memset(pxSession->pCurrentKs, 0, sizeof(SwKeyStore_t));
-            for (size_t i = 0; i < object_list_size; i++) {
-                pxSession->pCurrentKs->keyIdListLen = i + 1;
-                sss_object_t object;
-                sss_status_t status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
-                if (status != kStatus_SSS_Success) {
-                    LOG_E("Object init failed. Should not reach here");
-                    continue;
-                }
-                status = sss_key_object_get_handle(&object, object_list[i]);
-                if (status != kStatus_SSS_Success) {
-                    LOG_E("Object get handle failed for 0x%08X", object_list[i]);
-                    continue;
-                }
-                memcpy(&pxSession->pCurrentKs->SSSObjects[i], &object, sizeof(pxSession->pCurrentKs->SSSObjects[0]));
-            }
-        }
 
-        size_t i                       = 0;
-        CK_OBJECT_HANDLE_PTR ckObjects = (CK_OBJECT_HANDLE_PTR)SSS_MALLOC(sizeof(CK_OBJECT_HANDLE) * ulMaxObjectCount);
-        *pulObjectCount                = 0;
-        if (!ckObjects) {
-            xResult = CKR_HOST_MEMORY;
-            xDone   = true;
-            return xResult;
-        }
-        memset(ckObjects, 0, sizeof(CK_OBJECT_HANDLE) * ulMaxObjectCount);
+            total_objs_reads                   = total_objs_reads + object_list_size;
+            pxSession->xFindObjectOutputOffset = pxSession->xFindObjectOutputOffset + object_list_size;
 
-        if (sss_pkcs11_mutex_lock() != 0) {
-            xResult = CKR_CANT_LOCK;
-            return xResult;
-        }
-        for (i = (pxSession->xFindObjectOutputOffset % USER_MAX_ID_LIST_SIZE);
-             ((i < object_list_size) && (*pulObjectCount < ulMaxObjectCount));
-             i++) {
-            uint32_t id = object_list[i];
-            sss_object_t *pObject;
-
-            pxSession->xFindObjectOutputOffset++;
-            pObject = &pxSession->pCurrentKs->SSSObjects[i];
-
-            if (pObject->keyId == 0) {
-                continue;
+            if (object_list_size == 0) { /* No objects in SE */
+                break;
             }
+
+            if (total_objs_reads >= ulMaxObjectCount) { /* Max objects requested read */
+                break;
+            }
+
+            ulMaxObjectCountTmp = ulMaxObjectCountTmp - object_list_size;
+
+        } while (ulMaxObjectCountTmp > 0);
+
+        ckObjects       = (CK_OBJECT_HANDLE_PTR)SSS_MALLOC(sizeof(CK_OBJECT_HANDLE) * total_objs_reads);
+        *pulObjectCount = 0;
+        ENSURE_OR_GO_EXIT(ckObjects != NULL);
+        memset(ckObjects, 0, sizeof(CK_OBJECT_HANDLE) * total_objs_reads);
+
+        for (size_t i = 0; i < total_objs_reads; i++) {
+            uint32_t id              = object_list[i];
+            sss_object_t *ptr_object = NULL;
+            sss_object_t object      = {0};
+
+#if ENABLE_OBJECT_CACHE
+            ptr_object = &cache_sssObjects[i];
+
+#else
+            ptr_object = &object;
+#endif
+            status = sss_key_object_init(ptr_object, &pex_sss_demo_boot_ctx->ks);
+            if (status != kStatus_SSS_Success) {
+                xResult = CKR_FUNCTION_FAILED;
+                goto exit;
+            }
+            status = sss_key_object_get_handle(ptr_object, object_list[i]);
+            if (status != kStatus_SSS_Success) {
+                /* Reset the count so that handle moves to next object */
+                *pulObjectCount = 0;
+                goto exit;
+            }
+
             if (pxSession->xFindObjectClass == pkcs11INVALID_OBJECT_CLASS &&
                 pxSession->xFindObjectKeyType == pkcs11INVALID_KEY_TYPE) {
                 /* For public key attributes */
-                if (pxSession->pFindObject->xSetPublicKey == CK_TRUE) {
-                    memcpy(&ckObjects[*pulObjectCount], &pxSession->pFindObject->keyPairObjHandle, sizeof(id));
-                    (*pulObjectCount)++;
-                    pxSession->pFindObject->xSetPublicKey = CK_FALSE;
-                }
-                else {
-                    memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
-                    (*pulObjectCount)++;
-                    /* For public key attributes */
-                    if (pObject->objectType == kSSS_KeyPart_Pair) {
-                        pxSession->pFindObject->keyPairObjHandle = id;
-                        pxSession->pFindObject->xSetPublicKey    = CK_TRUE;
-                        /* We have maintained object cache having same object for keypair type
-                            * So, for private/public key there will be same keyobject.
-                            * Here xFindObjectOutputOffset is decremented so that it points to the
-                            * public key instead of pointing to the next object.
-                            */
-                        pxSession->xFindObjectOutputOffset--;
-                    }
-                }
+                memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
+                (*pulObjectCount)++;
             }
             else if (pxSession->xFindObjectClass != pkcs11INVALID_OBJECT_CLASS &&
                      pxSession->xFindObjectKeyType == pkcs11INVALID_KEY_TYPE) {
                 CK_BBOOL isX509Cert = CK_FALSE;
-                if (pObject->cipherType == kSSS_CipherType_Binary) {
+                if (ptr_object->cipherType == kSSS_CipherType_Binary) {
                     isX509Cert = pkcs11_is_X509_certificate(id);
                 }
-                if ((pObject->cipherType == kSSS_CipherType_Binary && isX509Cert == CK_TRUE &&
+                if ((ptr_object->cipherType == kSSS_CipherType_Binary && isX509Cert == CK_TRUE &&
                         pxSession->xFindObjectClass == CKO_CERTIFICATE) ||
-                    (pObject->objectType == kSSS_KeyPart_Pair && (pxSession->xFindObjectClass == CKO_PRIVATE_KEY ||
-                                                                     pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) ||
-                    (pObject->objectType == kSSS_KeyPart_Public && pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) {
+                    (ptr_object->objectType == kSSS_KeyPart_Pair &&
+                        (pxSession->xFindObjectClass == CKO_PRIVATE_KEY ||
+                            pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) ||
+                    (ptr_object->objectType == kSSS_KeyPart_Public && pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) {
                     memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
                     (*pulObjectCount)++;
                 }
             }
             else if (pxSession->xFindObjectClass == pkcs11INVALID_OBJECT_CLASS &&
                      pxSession->xFindObjectKeyType != pkcs11INVALID_KEY_TYPE) {
-                if ((pObject->cipherType == kSSS_CipherType_AES && pxSession->xFindObjectKeyType == CKK_AES) ||
-                    (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES) ||
-                    (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES2) ||
-                    (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES3) ||
-                    (pObject->cipherType == kSSS_CipherType_RSA && pxSession->xFindObjectKeyType == CKK_RSA) ||
-                    (pObject->cipherType == kSSS_CipherType_RSA_CRT && pxSession->xFindObjectKeyType == CKK_RSA) ||
-                    (pObject->cipherType == kSSS_CipherType_EC_NIST_P && pxSession->xFindObjectKeyType == CKK_EC)) {
+                if ((ptr_object->cipherType == kSSS_CipherType_AES && pxSession->xFindObjectKeyType == CKK_AES) ||
+                    (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES) ||
+                    (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES2) ||
+                    (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES3) ||
+                    (ptr_object->cipherType == kSSS_CipherType_RSA && pxSession->xFindObjectKeyType == CKK_RSA) ||
+                    (ptr_object->cipherType == kSSS_CipherType_RSA_CRT && pxSession->xFindObjectKeyType == CKK_RSA) ||
+                    (ptr_object->cipherType == kSSS_CipherType_EC_NIST_P && pxSession->xFindObjectKeyType == CKK_EC)) {
                     memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
                     (*pulObjectCount)++;
                 }
@@ -578,46 +627,44 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
             else if (pxSession->xFindObjectClass != pkcs11INVALID_OBJECT_CLASS &&
                      pxSession->xFindObjectKeyType != pkcs11INVALID_KEY_TYPE) {
                 CK_BBOOL isX509Cert = CK_FALSE;
-                if (pObject->cipherType == kSSS_CipherType_Binary) {
+                if (ptr_object->cipherType == kSSS_CipherType_Binary) {
                     isX509Cert = pkcs11_is_X509_certificate(id);
                 }
-                if ((pObject->cipherType == kSSS_CipherType_Binary && isX509Cert == CK_TRUE &&
+                if ((ptr_object->cipherType == kSSS_CipherType_Binary && isX509Cert == CK_TRUE &&
                         pxSession->xFindObjectClass == CKO_CERTIFICATE) ||
-                    (pObject->objectType == kSSS_KeyPart_Pair && (pxSession->xFindObjectClass == CKO_PRIVATE_KEY ||
-                                                                     pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) ||
-                    (pObject->objectType == kSSS_KeyPart_Public && pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) {
-                    if ((pObject->cipherType == kSSS_CipherType_AES && pxSession->xFindObjectKeyType == CKK_AES) ||
-                        (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES) ||
-                        (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES2) ||
-                        (pObject->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES3) ||
-                        (pObject->cipherType == kSSS_CipherType_RSA && pxSession->xFindObjectKeyType == CKK_RSA) ||
-                        (pObject->cipherType == kSSS_CipherType_RSA_CRT && pxSession->xFindObjectKeyType == CKK_RSA) ||
-                        (pObject->cipherType == kSSS_CipherType_EC_NIST_P && pxSession->xFindObjectKeyType == CKK_EC)) {
+                    (ptr_object->objectType == kSSS_KeyPart_Pair &&
+                        (pxSession->xFindObjectClass == CKO_PRIVATE_KEY ||
+                            pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) ||
+                    (ptr_object->objectType == kSSS_KeyPart_Public && pxSession->xFindObjectClass == CKO_PUBLIC_KEY)) {
+                    if ((ptr_object->cipherType == kSSS_CipherType_AES && pxSession->xFindObjectKeyType == CKK_AES) ||
+                        (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES) ||
+                        (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES2) ||
+                        (ptr_object->cipherType == kSSS_CipherType_DES && pxSession->xFindObjectKeyType == CKK_DES3) ||
+                        (ptr_object->cipherType == kSSS_CipherType_RSA && pxSession->xFindObjectKeyType == CKK_RSA) ||
+                        (ptr_object->cipherType == kSSS_CipherType_RSA_CRT &&
+                            pxSession->xFindObjectKeyType == CKK_RSA) ||
+                        (ptr_object->cipherType == kSSS_CipherType_EC_NIST_P &&
+                            pxSession->xFindObjectKeyType == CKK_EC)) {
                         memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
                         (*pulObjectCount)++;
                     }
                 }
             }
         }
-        if (sss_pkcs11_mutex_unlock() != 0) {
-            SSS_FREE(ckObjects);
-            return CKR_FUNCTION_FAILED;
-        }
 
         if (*pulObjectCount > 0) {
             memcpy(pxObject, ckObjects, (sizeof(CK_OBJECT_HANDLE) * (*pulObjectCount)));
             pxSession->xFindObjectTotalFound = pxSession->xFindObjectTotalFound + *pulObjectCount;
         }
-        else if (pxSession->xFindObjectOutputOffset % USER_MAX_ID_LIST_SIZE == 0) {
-            if (ckObjects) {
-                SSS_FREE(ckObjects);
-            }
-            goto retry;
-        }
-        if (ckObjects) {
-            SSS_FREE(ckObjects);
-        }
-        xDone = true;
+    }
+
+    xResult = CKR_OK;
+exit:
+    if (sss_pkcs11_mutex_unlock() != 0) {
+        LOG_E("sss_pkcs11_mutex_unlock failed");
+    }
+    if (ckObjects) {
+        SSS_FREE(ckObjects);
     }
     return xResult;
 }
@@ -645,10 +692,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjectsFinal)(CK_SESSION_HANDLE xSession)
     pxSession->xFindObjectKeyType      = pkcs11INVALID_KEY_TYPE;
     pxSession->xFindObjectOutputOffset = 0;
 
-    if (NULL != pxSession->pCurrentKs) {
-        SSS_FREE(pxSession->pCurrentKs);
-        pxSession->pCurrentKs = NULL;
-    }
     return CKR_OK;
 }
 
@@ -668,7 +711,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_CopyObject)
     AX_UNUSED_ARG(pTemplate);
     AX_UNUSED_ARG(ulCount);
     AX_UNUSED_ARG(phNewObject);
+
     LOG_D("%s", __FUNCTION__);
+
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
 // LCOV_EXCL_STOP
@@ -699,27 +744,30 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
         Attribute.DERIVE: MechanismFlag.DERIVE & capabilities,
         template_[Attribute.VALUE_LEN] = key_length // 8  # In bytes
     */
-    CK_RV xResult           = CKR_FUNCTION_FAILED;
-    sss_status_t sss_status = kStatus_SSS_Fail;
-    sss_rng_context_t sss_rng_ctx;
-    uint32_t keyId               = 0x0;
-    size_t keyLen                = 0;
-    sss_cipher_type_t cipherType = kSSS_CipherType_NONE;
-    CK_ULONG attributeIndex      = 0;
-    CK_OBJECT_CLASS ck_object    = pkcs11INVALID_OBJECT_CLASS;
-    CK_MECHANISM mech            = *pMechanism;
-    uint8_t randomKey[64]        = {0};
-    sss_object_t sss_object      = {0};
+    CK_RV xResult                      = CKR_FUNCTION_FAILED;
+    P11SessionPtr_t pxSession          = prvSessionPointerFromHandle(hSession);
+    sss_status_t sss_status            = kStatus_SSS_Fail;
+    sss_rng_context_t sss_rng_ctx      = {0};
+    uint32_t keyId                     = 0x0;
+    size_t keyLen                      = 0;
+    sss_cipher_type_t cipherType       = kSSS_CipherType_NONE;
+    CK_ULONG attributeIndex            = 0;
+    CK_MECHANISM mech                  = {0};
+    uint8_t randomKey[64]              = {0};
+    sss_object_t sss_object            = {0};
+    sss_se05x_session_t *se05x_session = (sss_se05x_session_t *)(&(pex_sss_demo_boot_ctx->session));
+    SE05x_Result_t IdExists            = kSE05x_Result_NA;
 
     AX_UNUSED_ARG(hSession);
     LOG_D("%s", __FUNCTION__);
 
-    ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_CLASS, &attributeIndex) == CKR_OK);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pxSession, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pMechanism, CKR_MECHANISM_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pTemplate, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != phKey, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
-    /* Ensure that CK_OBJECT_CLASS is CKO_SECRET_KEY */
-    ck_object = *((CK_OBJECT_CLASS_PTR)pTemplate[attributeIndex].pValue);
-    ENSURE_OR_GO_EXIT(ck_object == CKO_SECRET_KEY);
-
+    mech = *pMechanism;
     if (mech.mechanism == CKM_AES_KEY_GEN) {
         ENSURE_OR_GO_EXIT(
             pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_VALUE_LEN, &attributeIndex) == CKR_OK);
@@ -733,6 +781,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
 
         cipherType = kSSS_CipherType_AES;
     }
+    else if (mech.mechanism == CKM_DES_KEY_GEN) {
+        keyLen     = 8; /* Fixed length for DES key */
+        cipherType = kSSS_CipherType_DES;
+    }
     else if (mech.mechanism == CKM_DES2_KEY_GEN) {
         keyLen     = 16; /* Fixed length for DES key */
         cipherType = kSSS_CipherType_DES;
@@ -741,7 +793,24 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
         keyLen     = 24; /* Fixed length for DES key */
         cipherType = kSSS_CipherType_DES;
     }
+    else if (mech.mechanism == CKM_GENERIC_SECRET_KEY_GEN) {
+        ENSURE_OR_GO_EXIT(
+            pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_VALUE_LEN, &attributeIndex) == CKR_OK);
 
+        keyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        if ((keyLen != 16) && (keyLen != 24) && (keyLen != 32)) {
+            LOG_E("Unsupported key length %d", keyLen);
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        cipherType = kSSS_CipherType_HMAC;
+    }
+    else {
+        LOG_E("mechanism is not supported");
+        xResult = CKR_ARGUMENTS_BAD;
+        goto exit;
+    }
     xResult = pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_LABEL, &attributeIndex);
     if (xResult != CKR_OK) {
         /* CKA_LABEL was not provided. Generate a random keyId */
@@ -754,15 +823,34 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
     }
 
     /* Generate random data */
-    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_pkcs11_mutex_lock() == 0, xResult, CKR_CANT_LOCK);
 
     sss_status = sss_rng_context_init(&sss_rng_ctx, &pex_sss_demo_boot_ctx->session);
-    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_status == kStatus_SSS_Success, xResult, CKR_DEVICE_ERROR);
+    if (sss_status != kStatus_SSS_Success) {
+        xResult = CKR_DEVICE_ERROR;
+        goto exit;
+    }
 
     sss_status = sss_rng_get_random(&sss_rng_ctx, randomKey, keyLen);
-    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_status == kStatus_SSS_Success, xResult, CKR_DEVICE_ERROR);
+    if (sss_status != kStatus_SSS_Success) {
+        xResult = CKR_DEVICE_ERROR;
+        goto exit;
+    }
 
-    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_pkcs11_mutex_unlock() == 0, xResult, CKR_CANT_LOCK);
+    /* Checking and deleting the key if already present */
+    if (SM_OK == Se05x_API_CheckObjectExists(&se05x_session->s_ctx, keyId, &IdExists)) {
+        if ((IdExists == kSE05x_Result_SUCCESS) &&
+            ((cipherType == kSSS_CipherType_HMAC) || (cipherType == kSSS_CipherType_AES) ||
+                (cipherType == kSSS_CipherType_DES))) {
+            LOG_W("Key id 0x%X already exists!!", keyId);
+            ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
+                SM_OK == Se05x_API_DeleteSecureObject(&se05x_session->s_ctx, keyId), xResult, CKR_FUNCTION_FAILED);
+        }
+    }
+    else {
+        LOG_E("Se05x_API_CheckObjectExists Failed !!");
+        xResult = CKR_FUNCTION_FAILED;
+        goto exit;
+    }
 
     /* Import secret key */
     sss_status = pkcs11_sss_create_token(&pex_sss_demo_boot_ctx->ks,
@@ -782,6 +870,12 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
 
     xResult = CKR_OK;
 exit:
+    if (sss_rng_ctx.session != NULL) {
+        sss_rng_context_free(&sss_rng_ctx);
+    }
+    if (sss_pkcs11_mutex_unlock() != 0) {
+        return CKR_FUNCTION_FAILED;
+    }
     return xResult;
 }
 
@@ -814,14 +908,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
 
     LOG_D("%s", __FUNCTION__);
 
-    if (pxSession == NULL) {
-        xResult = CKR_SESSION_HANDLE_INVALID;
-        return xResult;
-    }
-
-    if (!pMechanism) {
-        return CKR_ARGUMENTS_BAD;
-    }
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pxSession, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != phPublicKey, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != phPrivateKey, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pMechanism, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pPublicKeyTemplate, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pPrivateKeyTemplate, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
     switch (pMechanism->mechanism) {
     case CKM_EC_KEY_PAIR_GEN:
@@ -844,82 +937,44 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
         }
 
         if (pPublicKeyTemplate[ec_params_index].ulValueLen > sizeof(ec_params)) {
+            xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
         memcpy(ec_params, pPublicKeyTemplate[ec_params_index].pValue, pPublicKeyTemplate[ec_params_index].ulValueLen);
 
-        uint8_t tag     = ASN_TAG_OBJ_IDF;
-        uint8_t oid[20] = {0};
-        size_t oidLen   = sizeof(oid);
-        xResult         = pkcs11_setASNTLV(
-            tag, (uint8_t *)MBEDTLS_OID_EC_GRP_SECP192R1, sizeof(MBEDTLS_OID_EC_GRP_SECP192R1) - 1, oid, &oidLen);
-        if (xResult != CKR_OK) {
-            return xResult;
+        if (memcmp(MBEDTLS_OID_EC_GRP_SECP192R1,
+                &ec_params[OID_START_INDEX],
+                sizeof(MBEDTLS_OID_EC_GRP_SECP192R1) - 1) == 0) {
+            KeyBitLen = 192;
+            goto cont;
         }
 
-        if (sizeof(oid) > oidLen) {
-            if (memcmp(&oid[oidLen], &ec_params[0], sizeof(oid) - oidLen) == 0) {
-                KeyBitLen = 192;
-                goto cont;
-            }
+        if (memcmp(MBEDTLS_OID_EC_GRP_SECP224R1,
+                &ec_params[OID_START_INDEX],
+                sizeof(MBEDTLS_OID_EC_GRP_SECP224R1) - 1) == 0) {
+            KeyBitLen = 224;
+            goto cont;
         }
 
-        oidLen = sizeof(oid);
-
-        xResult = pkcs11_setASNTLV(
-            tag, (uint8_t *)MBEDTLS_OID_EC_GRP_SECP224R1, sizeof(MBEDTLS_OID_EC_GRP_SECP224R1) - 1, oid, &oidLen);
-        if (xResult != CKR_OK) {
-            return xResult;
+        if (memcmp(MBEDTLS_OID_EC_GRP_SECP256R1,
+                &ec_params[OID_START_INDEX],
+                sizeof(MBEDTLS_OID_EC_GRP_SECP256R1) - 1) == 0) {
+            KeyBitLen = 256;
+            goto cont;
         }
 
-        if (sizeof(oid) > oidLen) {
-            if (memcmp(&oid[oidLen], &ec_params[0], sizeof(oid) - oidLen) == 0) {
-                KeyBitLen = 224;
-                goto cont;
-            }
-        }
-        oidLen = sizeof(oid);
-
-        xResult = pkcs11_setASNTLV(
-            tag, (uint8_t *)MBEDTLS_OID_EC_GRP_SECP256R1, sizeof(MBEDTLS_OID_EC_GRP_SECP256R1) - 1, oid, &oidLen);
-        if (xResult != CKR_OK) {
-            return xResult;
+        if (memcmp(MBEDTLS_OID_EC_GRP_SECP384R1,
+                &ec_params[OID_START_INDEX],
+                sizeof(MBEDTLS_OID_EC_GRP_SECP384R1) - 1) == 0) {
+            KeyBitLen = 384;
+            goto cont;
         }
 
-        if (sizeof(oid) > oidLen) {
-            if (memcmp(&oid[oidLen], &ec_params[0], sizeof(oid) - oidLen) == 0) {
-                KeyBitLen = 256;
-                goto cont;
-            }
-        }
-
-        oidLen = sizeof(oid);
-
-        xResult = pkcs11_setASNTLV(
-            tag, (uint8_t *)MBEDTLS_OID_EC_GRP_SECP384R1, sizeof(MBEDTLS_OID_EC_GRP_SECP384R1) - 1, oid, &oidLen);
-        if (xResult != CKR_OK) {
-            return xResult;
-        }
-
-        if (sizeof(oid) > oidLen) {
-            if (memcmp(&oid[oidLen], &ec_params[0], sizeof(oid) - oidLen) == 0) {
-                KeyBitLen = 384;
-                goto cont;
-            }
-        }
-        oidLen = sizeof(oid);
-
-        xResult = pkcs11_setASNTLV(
-            tag, (uint8_t *)MBEDTLS_OID_EC_GRP_SECP521R1, sizeof(MBEDTLS_OID_EC_GRP_SECP521R1) - 1, oid, &oidLen);
-        if (xResult != CKR_OK) {
-            return xResult;
-        }
-
-        if (sizeof(oid) > oidLen) {
-            if (memcmp(&oid[oidLen], &ec_params[0], sizeof(oid) - oidLen) == 0) {
-                KeyBitLen = 521;
-                goto cont;
-            }
+        if (memcmp(MBEDTLS_OID_EC_GRP_SECP521R1,
+                &ec_params[OID_START_INDEX],
+                sizeof(MBEDTLS_OID_EC_GRP_SECP521R1) - 1) == 0) {
+            KeyBitLen = 521;
+            goto cont;
         }
 
         return CKR_ARGUMENTS_BAD;
@@ -938,7 +993,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
 
         KeyBitLen = (size_t)modulusBits;
 
-        if ((KeyBitLen != 1024) && (KeyBitLen != 2048) && (KeyBitLen != 3072) && (KeyBitLen != 4096)) {
+        if ((KeyBitLen != 1024) && (KeyBitLen != 2048) && (KeyBitLen != 3072) && (KeyBitLen != 4096) &&
+            (KeyBitLen != 512)) {
             return CKR_ARGUMENTS_BAD;
         }
     }
@@ -1000,7 +1056,8 @@ cont:
     /* Checking and deleting the key if already present */
 
     if (SM_OK == Se05x_API_CheckObjectExists(&se05x_session->s_ctx, privKeyId, &IdExists)) {
-        if ((IdExists == kSE05x_Result_SUCCESS) && (cipherType == kSSS_CipherType_EC_NIST_P)) {
+        if ((IdExists == kSE05x_Result_SUCCESS) &&
+            ((cipherType == kSSS_CipherType_EC_NIST_P) || (cipherType == kSSS_CipherType_RSA))) {
             LOG_W("Key id 0x%X already exists!!", privKeyId);
             if (SM_OK != Se05x_API_DeleteSecureObject(&se05x_session->s_ctx, privKeyId)) {
                 LOG_E("Se05x_API_DeleteSecureObject Failed !!");
@@ -1020,11 +1077,6 @@ cont:
 
     if (pubKeyId == privKeyId) {
         skipPublicKey = CK_TRUE;
-    }
-
-    if (sss_pkcs11_mutex_lock() != 0) {
-        xResult = CKR_CANT_LOCK;
-        return xResult;
     }
 
     sss_status = sss_key_object_init(&sss_object, &pex_sss_demo_boot_ctx->ks);
@@ -1103,11 +1155,27 @@ exit:
 CK_DEFINE_FUNCTION(CK_RV, C_GetObjectSize)
 (CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hObject, CK_ULONG_PTR pulSize)
 {
-    AX_UNUSED_ARG(hSession);
-    AX_UNUSED_ARG(hObject);
-    AX_UNUSED_ARG(pulSize);
+    uint16_t keyLen           = 0;
+    P11SessionPtr_t pxSession = prvSessionPointerFromHandle(hSession);
+    sss_status_t status       = kStatus_SSS_Fail;
+    sss_object_t obj          = {0};
     LOG_D("%s", __FUNCTION__);
-    return CKR_FUNCTION_NOT_SUPPORTED;
+
+    ENSURE_OR_RETURN_ON_ERROR(NULL != pxSession, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(pulSize != NULL, CKR_ARGUMENTS_BAD);
+
+    status = pkcs11_get_validated_sss_object(pxSession, hObject, &obj);
+    if (status != kStatus_SSS_Success) {
+        pxSession->xOperationInProgress = pkcs11NO_OPERATION;
+        return CKR_OBJECT_HANDLE_INVALID;
+    }
+
+    if (CKR_OK != pkcs11_read_object_size((uint32_t)hObject, &keyLen)) {
+        /* Auth objects cannot be read. Assigning them them to 0 */
+        keyLen = 0;
+    }
+    *pulSize = keyLen;
+    return CKR_OK;
 }
 // LCOV_EXCL_STOP
 
@@ -1201,8 +1269,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             CKM_DES_ECB,
             CKM_DES_CBC,
         };
-        sss_se05x_session_t *se05x_session = (sss_se05x_session_t *)(&(pex_sss_demo_boot_ctx->session));
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+        CK_MECHANISM_TYPE keygen_mechanisms = 0;
+        sss_se05x_session_t *se05x_session  = (sss_se05x_session_t *)(&(pex_sss_demo_boot_ctx->session));
+#if SSS_HAVE_SE05X_VER_GTE_07_02
         se05x_object_attribute obj_attr = {0};
 #endif
 
@@ -1276,7 +1345,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 xP11KeyType = CKK_AES;
                 break;
             case kSSS_CipherType_HMAC:
-                xP11KeyType = CKK_SHA256_HMAC;
+                xP11KeyType = CKK_GENERIC_SECRET;
                 break;
             default:
                 xResult = CKR_ATTRIBUTE_VALUE_INVALID;
@@ -1658,55 +1727,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             }
 
             if (sss_object.objectType == kSSS_KeyPart_Private || sss_object.objectType == kSSS_KeyPart_Pair) {
-                if (xObject == pxSession->pAttrKey->keyPairObjHandle) {
-                    /* Doing nothing as its the same object handle */
-                }
-                else {
-                    /* Reset structure so that it can move to next object handle */
-                    pxSession->pAttrKey->keyPairObjHandle = xObject;
-                    pxSession->pAttrKey->xSetPublicKey    = CK_FALSE;
-                    pxSession->pAttrKey->keyState         = 0;
-                }
-
-                /* Returning public/private according to the flag */
-                if (pxSession->pAttrKey->xSetPublicKey != CK_TRUE) {
-                    objectClass  = CKO_PRIVATE_KEY;
-                    pvAttr       = &objectClass;
-                    ulAttrLength = sizeof(objectClass);
-                }
-                else {
-                    objectClass  = CKO_PUBLIC_KEY;
-                    pvAttr       = &objectClass;
-                    ulAttrLength = sizeof(objectClass);
-                }
-
-                /* To handling the public/private object and key states correctly */
-                switch (pxSession->pAttrKey->keyState) {
-                case PrivateKeySize: {
-                    pxSession->pAttrKey->keyState++;
-                    break;
-                }
-                case PrivateKeyAttr: {
-                    pxSession->pAttrKey->xSetPublicKey = CK_TRUE;
-                    pxSession->pAttrKey->keyState++;
-                    break;
-                }
-                case PublicKeySize: {
-                    pxSession->pAttrKey->keyState++;
-                    break;
-                }
-                case PublicKeyAttr: {
-                    pxSession->pAttrKey->xSetPublicKey = CK_FALSE;
-                    pxSession->pAttrKey->keyState      = 0;
-                    break;
-                }
-                default: {
-                    LOG_E("Invalid keystate hence unable to handle keypair");
-                    pvAttr       = NULL;
-                    ulAttrLength = CK_UNAVAILABLE_INFORMATION;
-                    break;
-                }
-                }
+                objectClass  = CKO_PRIVATE_KEY;
+                pvAttr       = &objectClass;
+                ulAttrLength = sizeof(objectClass);
             }
             else if (sss_object.objectType == kSSS_KeyPart_Public) {
                 objectClass  = CKO_PUBLIC_KEY;
@@ -1856,9 +1879,11 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 break;
             }
 
-            if (sss_object.objectType == kSSS_KeyPart_Private || sss_object.objectType == kSSS_KeyPart_Pair) {
+            if (sss_object.objectType == kSSS_KeyPart_Private || sss_object.objectType == kSSS_KeyPart_Pair ||
+                sss_object.objectType == kSSS_KeyPart_Default) {
                 if (sss_object.cipherType == kSSS_CipherType_RSA_CRT || sss_object.cipherType == kSSS_CipherType_RSA ||
-                    sss_object.cipherType == kSSS_CipherType_EC_NIST_P) {
+                    sss_object.cipherType == kSSS_CipherType_EC_NIST_P ||
+                    sss_object.cipherType == kSSS_CipherType_HMAC) {
                     supported    = CK_TRUE;
                     pvAttr       = &supported;
                     ulAttrLength = sizeof(supported);
@@ -1883,9 +1908,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 break;
             }
 
-            if (sss_object.objectType == kSSS_KeyPart_Public) {
+            if (sss_object.objectType == kSSS_KeyPart_Public || sss_object.objectType == kSSS_KeyPart_Default) {
                 if (sss_object.cipherType == kSSS_CipherType_RSA_CRT || sss_object.cipherType == kSSS_CipherType_RSA ||
-                    sss_object.cipherType == kSSS_CipherType_EC_NIST_P) {
+                    sss_object.cipherType == kSSS_CipherType_EC_NIST_P ||
+                    sss_object.cipherType == kSSS_CipherType_HMAC) {
                     supported    = CK_TRUE;
                     pvAttr       = &supported;
                     ulAttrLength = sizeof(supported);
@@ -1978,7 +2004,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 if ((sss_object.cipherType != kSSS_CipherType_Binary) &&
                     (sss_object.cipherType != kSSS_CipherType_Count)) {
                     // Secret key
-                    supported = CK_TRUE;
+                    supported = CK_FALSE;
                 }
             }
 
@@ -1995,7 +2021,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 break;
             }
 
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
             // Get attribute
             if (SM_OK != Se05x_API_ReadObjectAttributes(&se05x_session->s_ctx, sss_object.keyId, data, &dataLen)) {
                 ulAttrLength = 0;
@@ -2029,7 +2055,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                     supported = CK_FALSE;
                 }
             }
-#endif /* SSS_HAVE_SE05X_VER_GTE_06_00 */
+#endif /* SSS_HAVE_SE05X_VER_GTE_07_02 */
             pvAttr       = &supported;
             ulAttrLength = sizeof(supported);
             break;
@@ -2042,7 +2068,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             break;
         }
         case CKA_LOCAL: {
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
             if (kStatus_SSS_Success != pkcs11_get_validated_sss_object(pxSession, xObject, &sss_object)) {
                 ulAttrLength = 0;
                 xResult      = CKR_FUNCTION_FAILED;
@@ -2074,7 +2100,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
 #else
             // SE050 doesn't support ReadObjectAttributes, so use pre-defined value.
             supported = CK_FALSE;
-#endif /* SSS_HAVE_SE05X_VER_GTE_06_00 */
+#endif /* SSS_HAVE_SE05X_VER_GTE_07_02 */
             pvAttr       = &supported;
             ulAttrLength = sizeof(supported);
             break;
@@ -2098,7 +2124,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             case kSSS_CipherType_EC_NIST_K:
             case kSSS_CipherType_EC_TWISTED_ED:
             case kSSS_CipherType_EC_MONTGOMERY:
-            case kSSS_CipherType_EC_BARRETO_NAEHRIG:
                 pvAttr       = (void *)ecc_mechanisms;
                 ulAttrLength = sizeof(ecc_mechanisms);
 
@@ -2136,7 +2161,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 break;
             }
 
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
             // Get attribute
             if (SM_OK != Se05x_API_ReadObjectAttributes(&se05x_session->s_ctx, sss_object.keyId, data, &dataLen)) {
                 ulAttrLength = 0;
@@ -2159,7 +2184,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
 #else
             // SE050 doesn't support ReadObjectAttributes, so use pre-defined value.
             supported = CK_TRUE;
-#endif /* SSS_HAVE_SE05X_VER_GTE_06_00 */
+#endif /* SSS_HAVE_SE05X_VER_GTE_07_02 */
             pvAttr       = &supported;
             ulAttrLength = sizeof(supported);
             break;
@@ -2170,6 +2195,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             supported    = CK_FALSE;
             pvAttr       = &supported;
             ulAttrLength = sizeof(supported);
+            break;
+        }
+        case CKA_KEY_GEN_MECHANISM: {
+            /* Generated key is not local and has no keygen mechanism */
+            keygen_mechanisms = CK_UNAVAILABLE_INFORMATION;
+            pvAttr            = &keygen_mechanisms;
+            ulAttrLength      = sizeof(keygen_mechanisms);
             break;
         }
         default: {

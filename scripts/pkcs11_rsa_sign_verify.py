@@ -1,5 +1,5 @@
 #
-# Copyright 2023 NXP
+# Copyright 2023-2024 NXP
 # SPDX-License-Identifier: Apache-2.0
 #
 """
@@ -29,35 +29,45 @@ def main():
     run("%s --module %s --read-object --type pubkey --label sss:0xEF00000A -o %srsa_%s_0xEF00000A_public.key" % (pkcs11_tool, module_path, output_dir, args.key_type.split(":")[1]))
     log.info("###################################################")
 
+# provision public key at different keyid
+    log.info("Provisioning Public Key")
+    run("%s --module %s --write-object %srsa_%s_0xEF00000A_public.key --type pubkey --label sss:0xEF00000B " % (pkcs11_tool, module_path, output_dir, args.key_type.split(":")[1]))
+    log.info("###################################################")
 
     log.info("Signing data with length 10 bytes with key: %s algo: RSA-PKCS" % (args.key_type))
-    run("%s --module %s --sign --mechanism RSA-PKCS --label sss:0xEF00000A --input-file %sdata10.txt --output-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
+    run("%s --module %s --sign --mechanism RSA-PKCS --id 0a0000ef --input-file %sdata10.txt --output-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
     log.info("###################################################")
 
     log.info("Verifying data with length 10 bytes with key: %s algo: RSA-PKCS" % (args.key_type))
-    run("%s --module %s --verify --mechanism RSA-PKCS --label sss:0xEF00000A --input-file %sdata10.txt --signature-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
+    run("%s --module %s --verify --mechanism RSA-PKCS --id 0a0000ef --input-file %sdata10.txt --signature-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
     log.info("###################################################")
 
+    log.info("Verifying data with length 10 bytes with key: %s algo: RSA-PKCS and id 0b0000ef" % (args.key_type))
+    run("%s --module %s --verify --mechanism RSA-PKCS --id 0b0000ef --input-file %sdata10.txt --signature-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
+    log.info("###################################################")
 
     log.info("Signing data with length 10 bytes with key: %s algo: RSA-PKCS-PSS" % (args.key_type)) # Only SHA1 data
-    run("%s --module %s --sign --mechanism RSA-PKCS-PSS --label sss:0xEF00000A --input-file %sdata20.txt --output-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
+    run("%s --module %s --sign --mechanism RSA-PKCS-PSS --id 0a0000ef --input-file %sdata20.txt --output-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
     log.info("###################################################")
 
     log.info("Verifying data with length 10 bytes with key: %s algo: RSA-PKCS-PSS" % (args.key_type))
-    run("%s --module %s --verify --mechanism RSA-PKCS-PSS --label sss:0xEF00000A --input-file %sdata20.txt --signature-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
+    run("%s --module %s --verify --mechanism RSA-PKCS-PSS --id 0a0000ef --input-file %sdata20.txt --signature-file %sout_RSA_%s_input_10.sign" % (pkcs11_tool, module_path, input_dir, output_dir, args.key_type.split(":")[1]) )
     log.info("###################################################")
 
 
     for algo in algorithms_RSA_PKCS:
 
         log.info("Signing data with length 10 bytes with key: %s algo: %s" % (args.key_type, algo)) # Only SHA1 data
-        run("%s --module %s --sign --mechanism %s --label sss:0xEF00000A --input-file %sdata1024.txt --output-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        run("%s --module %s --sign --mechanism %s --id 0a0000ef --input-file %sdata1024.txt --output-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
         log.info("###################################################")
 
         log.info("Verifying data with length 10 bytes with key: %s algo: %s" % (args.key_type, algo))
-        run("%s --module %s --verify --mechanism %s --label sss:0xEF00000A --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        run("%s --module %s --verify --mechanism %s --id 0a0000ef --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
         log.info("###################################################")
 
+        log.info("Verifying data with length 10 bytes with key: %s algo: %s and id 0b0000ef" % (args.key_type, algo))
+        run("%s --module %s --verify --mechanism %s --id 0b0000ef --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        log.info("###################################################")
 
     for algo in algorithms_RSA_PKCS_PSS:
 
@@ -65,16 +75,23 @@ def main():
             continue
 
         log.info("Signing data with length 10 bytes with key: %s algo: %s" % (args.key_type, algo)) # Only SHA1 data
-        run("%s --module %s --sign --mechanism %s --label sss:0xEF00000A --input-file %sdata1024.txt --output-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        run("%s --module %s --sign --mechanism %s --id 0a0000ef --input-file %sdata1024.txt --output-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
         log.info("###################################################")
 
         log.info("Verifying data with length 10 bytes with key: %s algo: %s" % (args.key_type, algo))
-        run("%s --module %s --verify --mechanism %s --label sss:0xEF00000A --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        run("%s --module %s --verify --mechanism %s --id 0a0000ef --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
         log.info("###################################################")
 
+        log.info("Verifying data with length 10 bytes with key: %s algo: %s id 0b0000ef" % (args.key_type, algo))
+        run("%s --module %s --verify --mechanism %s --id 0b0000ef --input-file %sdata1024.txt --signature-file %sout_RSA_%s_input_1024.sign" % (pkcs11_tool, module_path, algo, input_dir, output_dir, args.key_type.split(":")[1]) )
+        log.info("###################################################")
 
     log.info("Deleting generated keypair")
     run("%s --module %s --delete-object --type privkey --label sss:0xEF00000A" % (pkcs11_tool, module_path))
+    log.info("###################################################")
+
+    log.info("Deleting provisioned public key")
+    run("%s --module %s --delete-object --type privkey --label sss:0xEF00000B" % (pkcs11_tool, module_path))
     log.info("###################################################")
 
     log.info("##############################################################")

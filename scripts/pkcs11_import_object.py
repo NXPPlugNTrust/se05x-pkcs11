@@ -1,5 +1,5 @@
 #
-# Copyright 2023 NXP
+# Copyright 2023-2024 NXP
 # SPDX-License-Identifier: Apache-2.0
 #
 """
@@ -101,18 +101,16 @@ def main():
         run("%s --module %s --delete-object --type %s --label sss:0xEF000001" % (pkcs11_tool, module_path, obj_type))
         log.info("###################################################")
 
+    obj_type = "pubkey"
+    file_name = "rsa1024_public.pem"
+    file_dir = key_dir + os.sep + file_name
 
-    # To be fixed
-    #obj_type = "pubkey"
-    #file_name = "rsa1024_public.pem"
-    #file_dir = key_dir + os.sep + file_name
+    log.info("Importing RSA Public key object: %s" % (file_name))
+    run("%s --module %s --write-object %s --type  %s --label sss:0xEF000005" % (pkcs11_tool, module_path, file_dir, obj_type))
+    log.info("###################################################")
 
-    #log.info("Importing RSA Public key object: %s" % (file_name))
-    #run("%s --module %s --write-object %s --type  %s --label sss:0xEF000005" % (pkcs11_tool, module_path, file_dir, obj_type))
-    #log.info("###################################################")
-
-    #log.info("Deleting the public key")
-    #run("%s --module %s --delete-object --type %s --label sss:0xEF000005" % (pkcs11_tool, module_path, obj_type))
+    log.info("Deleting the public key")
+    run("%s --module %s --delete-object --type %s --label sss:0xEF000005" % (pkcs11_tool, module_path, obj_type))
 
     obj_type = "secrkey"
     key_sizes = ["16","32"]

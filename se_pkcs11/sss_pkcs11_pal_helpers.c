@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 NXP
+ * Copyright 2021,2024 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,6 +19,11 @@
             pTLV += taglen + 1 + 3 /* Length bytes */; \
         }                                              \
     }
+
+/* ********************** Global variables ********************** */
+#if ENABLE_OBJECT_CACHE
+extern sss_object_t cache_sssObjects[MAX_CACHE_OBJECT];
+#endif
 
 /* ********************** Public Functions ********************** */
 
@@ -121,10 +126,18 @@ CK_RV pkcs11_parse_sign_mechanism(P11SessionPtr_t pxSession, sss_algorithm_t *al
     case CKM_ECDSA_SHA512:
         *algorithm = kAlgorithm_SSS_ECDSA_SHA512;
         break;
+    case CKM_SHA_1_HMAC:
+        *algorithm = kAlgorithm_SSS_HMAC_SHA1;
+        break;
     case CKM_SHA256_HMAC:
         *algorithm = kAlgorithm_SSS_HMAC_SHA256;
         break;
-
+    case CKM_SHA384_HMAC:
+        *algorithm = kAlgorithm_SSS_HMAC_SHA384;
+        break;
+    case CKM_SHA512_HMAC:
+        *algorithm = kAlgorithm_SSS_HMAC_SHA512;
+        break;
     default:
         xResult = CKR_MECHANISM_INVALID;
         break;
@@ -150,11 +163,6 @@ CK_RV pkcs11_parse_encryption_mechanism(P11SessionPtr_t pxSession, sss_algorithm
     CK_RSA_PKCS_OAEP_PARAMS_PTR param;
     switch (pxSession->xOperationInProgress) {
     case CKM_RSA_PKCS:
-    case CKM_SHA1_RSA_PKCS:
-    case CKM_SHA256_RSA_PKCS:
-    case CKM_SHA384_RSA_PKCS:
-    case CKM_SHA512_RSA_PKCS:
-    case CKM_SHA224_RSA_PKCS:
         *algorithm = kAlgorithm_SSS_RSAES_PKCS1_V1_5;
         break;
 
@@ -164,7 +172,6 @@ CK_RV pkcs11_parse_encryption_mechanism(P11SessionPtr_t pxSession, sss_algorithm
         /* Also see how to use source, pSourceData, ulSourceDataLen
          * in RSA_PKCS_OAEP_PARAMS
          */
-
         if (!pxSession->mechParameterLen) {
             xResult = CKR_ARGUMENTS_BAD;
             break;
@@ -212,7 +219,18 @@ CK_RV pkcs11_parse_encryption_mechanism(P11SessionPtr_t pxSession, sss_algorithm
     case CKM_AES_CTR:
         *algorithm = kAlgorithm_SSS_AES_CTR;
         break;
-
+    case CKM_DES_ECB:
+        *algorithm = kAlgorithm_SSS_DES_ECB;
+        break;
+    case CKM_DES_CBC:
+        *algorithm = kAlgorithm_SSS_DES_CBC;
+        break;
+    case CKM_DES3_CBC:
+        *algorithm = kAlgorithm_SSS_DES3_CBC;
+        break;
+    case CKM_DES3_ECB:
+        *algorithm = kAlgorithm_SSS_DES3_ECB;
+        break;
     default:
         xResult = CKR_MECHANISM_INVALID;
         break;
@@ -276,6 +294,7 @@ CK_RV pkcs11_get_digest_algorithm(const sss_algorithm_t algorithm, sss_algorithm
     case kAlgorithm_SSS_RSASSA_PKCS1_PSS_MGF1_SHA1:
     case kAlgorithm_SSS_RSAES_PKCS1_OAEP_SHA1:
     case kAlgorithm_SSS_ECDSA_SHA1:
+    case kAlgorithm_SSS_HMAC_SHA1:
         *digest_algo = kAlgorithm_SSS_SHA1;
         break;
     case kAlgorithm_SSS_SHA224:
@@ -298,6 +317,7 @@ CK_RV pkcs11_get_digest_algorithm(const sss_algorithm_t algorithm, sss_algorithm
     case kAlgorithm_SSS_RSASSA_PKCS1_PSS_MGF1_SHA384:
     case kAlgorithm_SSS_RSAES_PKCS1_OAEP_SHA384:
     case kAlgorithm_SSS_ECDSA_SHA384:
+    case kAlgorithm_SSS_HMAC_SHA384:
         *digest_algo = kAlgorithm_SSS_SHA384;
         break;
     case kAlgorithm_SSS_SHA512:
@@ -305,6 +325,7 @@ CK_RV pkcs11_get_digest_algorithm(const sss_algorithm_t algorithm, sss_algorithm
     case kAlgorithm_SSS_RSASSA_PKCS1_PSS_MGF1_SHA512:
     case kAlgorithm_SSS_RSAES_PKCS1_OAEP_SHA512:
     case kAlgorithm_SSS_ECDSA_SHA512:
+    case kAlgorithm_SSS_HMAC_SHA512:
         *digest_algo = kAlgorithm_SSS_SHA512;
         break;
     default:
@@ -374,9 +395,8 @@ CK_RV pkcs11_label_to_keyId(unsigned char *label, size_t labelSize, uint32_t *ke
     uint8_t rngData[10]           = {0};
     size_t rngDataLen             = sizeof(rngData);
 
-    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
-
     if (labelSize == 0) {
+        LOG_W("CKA_LABEL was not provided so generating a random keyId !!");
         status = sss_rng_context_init(&sss_rng_ctx, &pex_sss_demo_boot_ctx->session /* Session */);
         ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
@@ -416,9 +436,6 @@ CK_RV pkcs11_label_to_keyId(unsigned char *label, size_t labelSize, uint32_t *ke
 exit:
     if (digest_ctx.session != NULL) {
         sss_digest_context_free(&digest_ctx);
-    }
-    if (sss_pkcs11_mutex_unlock() != 0) {
-        return CKR_FUNCTION_FAILED;
     }
     return result;
 }
@@ -529,7 +546,7 @@ exit:
     return xResult;
 }
 
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
 
 /**
  * @brief Parse object attribtes from Se05x_API_ReadObjectAttributes. Check specific policy is allowed
@@ -711,11 +728,10 @@ sss_status_t pkcs11_parse_atrribute(se05x_object_attribute *pAttribute,
 smStatus_t pkcs11_read_id_list(
     CK_SESSION_HANDLE xSession, uint32_t *idlist, size_t *idlistlen, CK_ULONG ulMaxObjectCount)
 {
-    AX_UNUSED_ARG(ulMaxObjectCount);
-    P11SessionPtr_t pxSession          = prvSessionPointerFromHandle(xSession);
-    uint8_t pmore                      = kSE05x_MoreIndicator_NA;
-    uint8_t list[MAX_ID_LIST_SIZE * 4] = {0};
-    size_t listlen                     = sizeof(list);
+    P11SessionPtr_t pxSession = prvSessionPointerFromHandle(xSession);
+    uint8_t pmore             = kSE05x_MoreIndicator_NA;
+    uint8_t list[1024]        = {0};
+    size_t listlen            = sizeof(list);
     size_t i, k = 0;
     smStatus_t retStatus          = SM_NOT_OK;
     sss_se05x_session_t *pSession = (sss_se05x_session_t *)&pex_sss_demo_boot_ctx->session;
@@ -726,17 +742,16 @@ smStatus_t pkcs11_read_id_list(
     ENSURE_OR_GO_EXIT(idlist != NULL);
     ENSURE_OR_GO_EXIT(idlistlen != NULL);
 
-    ENSURE_OR_GO_EXIT(sss_pkcs11_mutex_lock() == 0);
-
     ENSURE_OR_GO_EXIT(
         Se05x_API_ReadIDList(session_ctx, pxSession->xFindObjectOutputOffset, 0xFF, &pmore, list, &listlen) == SM_OK);
 
     if (listlen == 0) {
         *idlistlen = 0;
+        retStatus  = SM_OK;
         goto exit;
     }
 
-    for (i = 0; (i < listlen) && (k < USER_MAX_ID_LIST_SIZE); i += 4) {
+    for (i = 0; (i < listlen) && (k < ulMaxObjectCount); i += 4) {
         uint32_t id = 0 | (list[i + 0] << (3 * 8)) | (list[i + 1] << (2 * 8)) | (list[i + 2] << (1 * 8)) |
                       (list[i + 3] << (0 * 8));
         idlist[k++] = id;
@@ -745,9 +760,6 @@ smStatus_t pkcs11_read_id_list(
 
     retStatus = SM_OK;
 exit:
-    if (sss_pkcs11_mutex_unlock() != 0) {
-        return SM_NOT_OK;
-    }
     return retStatus;
 }
 
@@ -759,36 +771,47 @@ sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT
     sss_status_t sss_status = kStatus_SSS_Fail;
     sss_object_t sss_object = {0};
 
-    if (pxSession->xFindObjectInit == CK_TRUE) {
-        /* Find Objects operation is going on. Read from SW keystore */
-        SwKeyStorePtr_t pCurrentKeyStore = pxSession->pCurrentKs;
-        if (xObject > UINT32_MAX) {
-            LOG_E("Key id cannot be greater than 4 bytes");
-            return kStatus_SSS_Fail;
-        }
+    if (xObject > UINT32_MAX) {
+        LOG_E("Key id cannot be greater than 4 bytes");
+        sss_status = kStatus_SSS_Fail;
+        goto exit;
+    }
 
-        for (size_t i = 0; i < pCurrentKeyStore->keyIdListLen; i++) {
-            if (pCurrentKeyStore->SSSObjects[i].keyId == (uint32_t)xObject) {
+    if (pxSession->xFindObjectInit == CK_TRUE) {
+        /* Find Objects operation is going on. Read from cache */
+
+#if ENABLE_OBJECT_CACHE
+        for (size_t i = 0; i < MAX_CACHE_OBJECT; i++) {
+            if (cache_sssObjects[i].keyId == (uint32_t)xObject) {
                 /* True */
                 *keyId     = xObject;
                 sss_status = kStatus_SSS_Success;
                 break;
             }
         }
+#else
+        /* Object cache is disabled */
+        sss_status = sss_key_object_init(&sss_object, &pex_sss_demo_boot_ctx->ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_object_get_handle(&sss_object, xObject);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        *keyId     = xObject;
+
+#endif
     }
     else {
         sss_status = sss_key_object_init(&sss_object, &pex_sss_demo_boot_ctx->ks);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
-        if (xObject > UINT32_MAX) {
-            LOG_E("Key id cannot be greater than 4 bytes");
-            return kStatus_SSS_Fail;
-        }
         sss_status = sss_key_object_get_handle(&sss_object, xObject);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
         *keyId = xObject;
     }
 exit:
+    if (sss_status != kStatus_SSS_Success) {
+        *keyId = 0;
+    }
     return sss_status;
 }
 
@@ -800,33 +823,84 @@ sss_status_t pkcs11_get_validated_sss_object(
 {
     sss_status_t sss_status = kStatus_SSS_Fail;
 
+    ENSURE_OR_GO_EXIT(pSSSObject != NULL);
+
+    if (xObject > UINT32_MAX) {
+        LOG_E("Key id cannot be greater than 4 bytes");
+        sss_status = kStatus_SSS_Fail;
+        goto exit;
+    }
+
     if (pxSession->xFindObjectInit == CK_TRUE) {
-        /* Find Objects operation is going on. Read from SW keystore */
-        SwKeyStorePtr_t pCurrentKeyStore = pxSession->pCurrentKs;
-        if (xObject > UINT32_MAX) {
-            LOG_E("Key id cannot be greater than 4 bytes");
-            return kStatus_SSS_Fail;
-        }
-        for (size_t i = 0; (i < pCurrentKeyStore->keyIdListLen) && (i < USER_MAX_ID_LIST_SIZE); i++) {
-            if (pCurrentKeyStore->SSSObjects[i].keyId == (uint32_t)xObject) {
+        /* Find Objects operation is going on. Read from cache */
+#if ENABLE_OBJECT_CACHE
+        for (size_t i = 0; i < MAX_CACHE_OBJECT; i++) {
+            if (cache_sssObjects[i].keyId == (uint32_t)xObject) {
                 /* True */
-                memcpy(pSSSObject, &pCurrentKeyStore->SSSObjects[i], sizeof(*pSSSObject));
+                memcpy(pSSSObject, &cache_sssObjects[i], sizeof(*pSSSObject));
                 sss_status = kStatus_SSS_Success;
                 break;
             }
         }
+#else
+        sss_status = sss_key_object_init(pSSSObject, &pex_sss_demo_boot_ctx->ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_object_get_handle(pSSSObject, xObject);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+#endif
     }
     else {
         sss_status = sss_key_object_init(pSSSObject, &pex_sss_demo_boot_ctx->ks);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
-        if (xObject > UINT32_MAX) {
-            LOG_E("Key id cannot be greater than 4 bytes");
-            return kStatus_SSS_Fail;
-        }
         sss_status = sss_key_object_get_handle(pSSSObject, xObject);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
     }
 exit:
     return sss_status;
+}
+
+/** @brief valid keytype .
+ * This function checks if the algorithm is valid for the keytype.
+ *
+ * @param algorithm - Algorithm, e.g. kAlgorithm_SSS_AES_CBC.
+ * @param cipher - cipher to be applied, e.g. kSSS_CipherType_AES.
+ * @param pSSSObject - sss object to be passed to compare the ciphertype.
+ *
+ * @returns Status of the operation
+ * @retval #CKR_OK The operation has completed successfully.
+ * @retval #CKR_MECHANISM_INVALID If unknown algorithm specified.
+ * @retval CKR_KEY_TYPE_INCONSISTENT If the algrithm is invalid for the keytype.
+ *
+ */
+CK_RV pkcs11_is_valid_keytype(sss_algorithm_t algorithm, sss_cipher_type_t *cipher, sss_object_t *pSSSObject)
+{
+    CK_RV xResult = CKR_OK;
+    switch (algorithm) {
+    case kAlgorithm_SSS_AES_ECB:
+    case kAlgorithm_SSS_AES_CBC:
+    case kAlgorithm_SSS_AES_CTR:
+        *cipher = kSSS_CipherType_AES;
+        break;
+    case kAlgorithm_SSS_DES_CBC:
+    case kAlgorithm_SSS_DES_ECB:
+    case kAlgorithm_SSS_DES3_CBC:
+    case kAlgorithm_SSS_DES3_ECB:
+        *cipher = kSSS_CipherType_DES;
+        break;
+    case kAlgorithm_SSS_RSAES_PKCS1_V1_5:
+    case kAlgorithm_SSS_RSAES_PKCS1_OAEP_SHA1:
+        *cipher = kSSS_CipherType_RSA;
+        break;
+
+    default:
+        xResult = CKR_MECHANISM_INVALID;
+        break;
+    }
+
+    if (*cipher != (sss_cipher_type_t)pSSSObject->cipherType) {
+        xResult = CKR_KEY_TYPE_INCONSISTENT;
+    }
+    return xResult;
 }

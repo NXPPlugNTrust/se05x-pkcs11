@@ -1,7 +1,7 @@
 # PKCS11 for EdgeLock SE05x Secure Elements
 
 Depending on the capabilities of the attached secure element (e.g. SE050_C, SE051E, ...)
-the following functionality can be made available over the pkcs11 interface (sss pkcs11).
+the following functionality can be made available over the pkcs11 (version 2.40) interface (sss pkcs11).
 
 - EC crypto (nist192, nist256, secp384r1, secp521r1)
   - EC key generation
@@ -17,6 +17,8 @@ the following functionality can be made available over the pkcs11 interface (sss
   - Certificate
 - Message digest (SHA1, SHA224, SHA256, SHA384, SHA512)
 - Symmetric key generation
+- AES (ECB, CBC) Encrypt and decrypt
+- HMAC
 
 
 The SSS PKCS11 library here is tested with OpenSC pkcs11 tool.
@@ -58,6 +60,13 @@ Refer ``CMAKE Options section`` in ``simw_lib\README.rst`` to build PKCS11 libra
 
 ## Testing SSS PKCS11
 
+### List all keys and certificates in Secure Element
+
+```console
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so -O
+
+```
+
 ### Random Number Generation
 
 ```console
@@ -79,11 +88,8 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --keypairgen --key-type  EC
 
 ```
 
----
+`` Note: When passing the key id using CKA_ID attribute (--id), currently the key id has to be passed with endianness changed. Example id 12345678 has to be passed as - `--id 78563412` ``
 
-When passing the key id using CKA_ID attribute (--id), currently the key id has to be passed with endianness changed. Example id 12345678 has to be passed as - `--id 78563412`
-
----
 
 Supported curves
   - nist192
@@ -99,17 +105,21 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --read-object --type pubkey
 
 ```
 
-### ECDSA - Sign Operation (On hash data)
+### ECDSA - Sign/Verify Operation (On hash data)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --label sss:0xEF000001 --input-file scripts/input_data/data32.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --id 010000ef --input-file scripts/input_data/data32.txt -o out.sign
+
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA --id 010000ef --input-file scripts/input_data/data32.txt --signature-file out.sign
 
 ```
 
-### ECDSA - Sign Operation (On raw input)
+### ECDSA - Sign/Verify Operation (On raw input)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --label sss:0xEF000001 --input-file scripts/input_data/data1024.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --id 010000ef --input-file scripts/input_data/data1024.txt -o out.sign
+
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA-SHA256 --id 010000ef --input-file scripts/input_data/data1024.txt --signature-file out.sign
 
 ```
 
@@ -120,11 +130,8 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --keypairgen --key-type  rs
 
 ```
 
----
+`` Note: In the current implementation of SE05x PKCS11 module, the RSA key gnerated is of plain type. ``
 
-In the current implementation of SE05x PKCS11 module, the RSA key gnerated is of plain type.
-
----
 
 ### Message Digest
 
@@ -133,12 +140,7 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --hash --mechanism SHA256 -
 
 ```
 
----
-
-It should be noted that message digest when performed with multi-step operation, will result in flash writes.
-
----
-
+`` NOTE: Digest multi-step operation, will result in flash writes. ``
 
 ## Example Scripts for SSS PKCS11 Library
 
@@ -147,6 +149,8 @@ These scripts use the SSS PKCS11 library in the context of OpenSC  tool.
 They illustrate using the SSS PKCS11 library for fetching
 random data, EC or RSA crypto operations.
 The scripts assume the secure element is connected via I2C to the host.
+
+``NOTE: pkcs11_hmac_sign_verify.py and pkcs11_sym_key_gen.py are only supported with version equals to or greater than OpenSC 0.24.0  ``
 
 ```console
 # Random number generation
@@ -157,6 +161,9 @@ python pkcs11_ecc_key_gen.py
 
 # ECDSA Operations
 python pkcs11_ecc_sign_verify.py
+
+# ECDH derive keys
+python pkcs11_derive_key.py
 
 # RSA Key generation
 python pkcs11_rsa_key_gen.py
@@ -174,5 +181,11 @@ python pkcs11_message_digest.py
 # Symmetric key generate
 # (Invoke random number generation and set key)
 python pkcs11_sym_key_gen.py
+
+# HMAC Sign and Verify
+python pkcs11_hmac_sign_verify.py
+
+# AES (ECB, CBC) Encrypt and decrypt
+python pkcs11_encrypt_decrypt.py
 
 ```

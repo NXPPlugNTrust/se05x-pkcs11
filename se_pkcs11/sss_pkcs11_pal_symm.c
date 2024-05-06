@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 NXP
+ * Copyright 2021,2024 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -33,24 +33,31 @@ CK_RV pkcs11_se05x_symmetric_encrypt(P11SessionPtr_t pxSessionObj,
     CK_BYTE_PTR pEncryptedData,
     CK_ULONG_PTR pulEncryptedDataLen)
 {
-    CK_RV xResult              = CKR_FUNCTION_FAILED;
-    sss_status_t status        = kStatus_SSS_Fail;
-    uint8_t data[2048]         = {0};
-    sss_symmetric_t symmCtx    = {0};
-    sss_object_t symmObject    = {0};
-    uint8_t iv[AES_BLOCK_SIZE] = {0};
-    size_t ivLen               = sizeof(iv);
-    uint8_t encData[2048]      = {0};
-    size_t encDataLen          = sizeof(encData);
-    size_t tempOutBufLen       = encDataLen;
-    uint8_t *pOut              = &encData[0];
+    CK_RV xResult                 = CKR_FUNCTION_FAILED;
+    sss_status_t status           = kStatus_SSS_Fail;
+    uint8_t data[2048]            = {0};
+    sss_symmetric_t symmCtx       = {0};
+    sss_object_t symmObject       = {0};
+    uint8_t aesiv[AES_BLOCK_SIZE] = {0};
+    uint8_t desiv[DES_BLOCK_SIZE] = {0};
+    size_t aesivLen               = sizeof(aesiv);
+    size_t desivLen               = sizeof(desiv);
+    uint8_t encData[2048]         = {0};
+    size_t encDataLen             = sizeof(encData);
+    size_t tempOutBufLen          = encDataLen;
+    uint8_t *pOut                 = &encData[0];
 
     ENSURE_OR_RETURN_ON_ERROR(ulDataLen <= sizeof(data), CKR_HOST_MEMORY);
     memcpy(&data[0], pData, ulDataLen);
 
     if (algorithm == kAlgorithm_SSS_AES_CBC || algorithm == kAlgorithm_SSS_AES_CTR) {
         if (pxSessionObj->mechParameterLen != 0) {
-            memcpy(iv, pxSessionObj->mechParameter, ivLen);
+            memcpy(aesiv, pxSessionObj->mechParameter, aesivLen);
+        }
+    }
+    else if (algorithm == kAlgorithm_SSS_DES_CBC || algorithm == kAlgorithm_SSS_DES3_CBC) {
+        if (pxSessionObj->mechParameterLen != 0) {
+            memcpy(desiv, pxSessionObj->mechParameter, desivLen);
         }
     }
 
@@ -68,8 +75,16 @@ CK_RV pkcs11_se05x_symmetric_encrypt(P11SessionPtr_t pxSessionObj,
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
     /*Do Encryption*/
-    status = sss_cipher_init(&symmCtx, iv, ivLen);
-    ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    if (algorithm == kAlgorithm_SSS_AES_CBC || algorithm == kAlgorithm_SSS_AES_CTR ||
+        algorithm == kAlgorithm_SSS_AES_ECB) {
+        status = sss_cipher_init(&symmCtx, aesiv, aesivLen);
+        ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    }
+    else if (algorithm == kAlgorithm_SSS_DES_CBC || algorithm == kAlgorithm_SSS_DES3_CBC ||
+             algorithm == kAlgorithm_SSS_DES_ECB || algorithm == kAlgorithm_SSS_DES3_ECB) {
+        status = sss_cipher_init(&symmCtx, desiv, desivLen);
+        ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    }
 
     status = sss_cipher_update(&symmCtx, (const uint8_t *)pData, (size_t)ulDataLen, pOut, &tempOutBufLen);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
@@ -83,7 +98,12 @@ CK_RV pkcs11_se05x_symmetric_encrypt(P11SessionPtr_t pxSessionObj,
 
     encDataLen = encDataLen + tempOutBufLen;
     if (pEncryptedData) {
-        ENSURE_OR_GO_EXIT(*pulEncryptedDataLen >= encDataLen);
+        if (*pulEncryptedDataLen < encDataLen) {
+            /* Required length should be returned */
+            *pulEncryptedDataLen = encDataLen;
+            xResult              = CKR_BUFFER_TOO_SMALL;
+            goto exit;
+        }
         memcpy(pEncryptedData, &encData[0], encDataLen);
         pxSessionObj->xOperationInProgress = pkcs11NO_OPERATION;
     }
@@ -126,21 +146,28 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
     CK_BYTE_PTR pData,
     CK_ULONG_PTR pulDecryptedDataLen)
 {
-    CK_RV xResult              = CKR_OK;
-    sss_status_t status        = kStatus_SSS_Fail;
-    sss_symmetric_t symmCtx    = {0};
-    sss_object_t symmObject    = {0};
-    uint8_t iv[AES_BLOCK_SIZE] = {0};
-    size_t ivLen               = sizeof(iv);
-    uint8_t encData[256]       = {0};
-    size_t encDataLen          = sizeof(encData);
-    size_t tempOutBufLen       = encDataLen;
-    uint8_t *pOut              = &encData[0];
-    size_t i                   = 0;
+    CK_RV xResult                 = CKR_FUNCTION_FAILED;
+    sss_status_t status           = kStatus_SSS_Fail;
+    sss_symmetric_t symmCtx       = {0};
+    sss_object_t symmObject       = {0};
+    uint8_t aesiv[AES_BLOCK_SIZE] = {0};
+    size_t aesivLen               = sizeof(aesiv);
+    uint8_t desiv[DES_BLOCK_SIZE] = {0};
+    size_t desivLen               = sizeof(desiv);
+    uint8_t encData[256]          = {0};
+    size_t encDataLen             = sizeof(encData);
+    size_t tempOutBufLen          = encDataLen;
+    uint8_t *pOut                 = &encData[0];
+    size_t i                      = 0;
 
     if (algorithm == kAlgorithm_SSS_AES_CBC || algorithm == kAlgorithm_SSS_AES_CTR) {
         if (pxSessionObj->mechParameterLen != 0) {
-            memcpy(iv, pxSessionObj->mechParameter, ivLen);
+            memcpy(aesiv, pxSessionObj->mechParameter, aesivLen);
+        }
+    }
+    else if (algorithm == kAlgorithm_SSS_DES_CBC || algorithm == kAlgorithm_SSS_DES3_CBC) {
+        if (pxSessionObj->mechParameterLen != 0) {
+            memcpy(desiv, pxSessionObj->mechParameter, desivLen);
         }
     }
 
@@ -159,8 +186,16 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
     /*Do Decryption*/
-    status = sss_cipher_init(&symmCtx, iv, ivLen);
-    ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    if (algorithm == kAlgorithm_SSS_AES_CBC || algorithm == kAlgorithm_SSS_AES_CTR ||
+        algorithm == kAlgorithm_SSS_AES_ECB) {
+        status = sss_cipher_init(&symmCtx, aesiv, aesivLen);
+        ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    }
+    else if (algorithm == kAlgorithm_SSS_DES_CBC || algorithm == kAlgorithm_SSS_DES3_CBC ||
+             algorithm == kAlgorithm_SSS_DES_ECB || algorithm == kAlgorithm_SSS_DES3_ECB) {
+        status = sss_cipher_init(&symmCtx, desiv, desivLen);
+        ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
+    }
 
     status =
         sss_cipher_update(&symmCtx, (const uint8_t *)pEncryptedData, (size_t)ulEncryptedDataLen, pOut, &tempOutBufLen);
@@ -180,7 +215,12 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
     }
     encDataLen = encDataLen - i;
     if (pData) {
-        ENSURE_OR_GO_EXIT(*pulDecryptedDataLen >= encDataLen);
+        if ((*pulDecryptedDataLen) < encDataLen) {
+            /*Required Length should be returned*/
+            *pulDecryptedDataLen = encDataLen;
+            xResult              = CKR_BUFFER_TOO_SMALL;
+            goto exit;
+        }
         if (encDataLen > 0) {
             memcpy(pData, &encData[0], encDataLen);
             pxSessionObj->xOperationInProgress = pkcs11NO_OPERATION;

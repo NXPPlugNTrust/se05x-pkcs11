@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 NXP
+ * Copyright 2021,2024 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -50,15 +50,35 @@
 #endif //#if (__GNUC__ && !AX_EMBEDDED)
 #endif //#if defined(PKCS11_LIBRARY)
 
+/* Enable the object cache use in case of platforms not having any memory constraints */
+#if (__GNUC__ && !AX_EMBEDDED)
+#define ENABLE_OBJECT_CACHE 1
+#else
+#define ENABLE_OBJECT_CACHE 0
+#endif
+
 /* ********************** Global variables ********************** */
 extern ex_sss_boot_ctx_t *pex_sss_demo_boot_ctx;
 #if SSS_PKCS11_ENABLE_CLOUD_DEMO
 extern ex_sss_cloud_ctx_t *pex_sss_demo_tls_ctx;
 #endif
 
-/* ********************** Defines ********************** */
+extern const uint8_t ecc_der_header_secp192[];
+extern const uint8_t ecc_der_header_secp224[];
+extern const uint8_t ecc_der_header_secp256[];
+extern const uint8_t ecc_der_header_secp384[];
+extern const uint8_t ecc_der_header_secp521[];
 
+extern size_t const der_ecc_secp192_header_len;
+extern size_t const der_ecc_secp224_header_len;
+extern size_t const der_ecc_secp256_header_len;
+extern size_t const der_ecc_secp384_header_len;
+extern size_t const der_ecc_secp521_header_len;
+
+/* ********************** Defines ********************** */
+#define MAX_CACHE_OBJECT 300
 #define AES_BLOCK_SIZE 16
+#define DES_BLOCK_SIZE 8
 #define MAX_PKCS11_SESSIONS 3
 #define PKCS11_TOKEN_LABEL                               \
     {                                                    \
@@ -71,7 +91,7 @@ extern ex_sss_cloud_ctx_t *pex_sss_demo_tls_ctx;
 #define PKCS11_LIBRARY_VERSION  \
     (CK_VERSION)                \
     {                           \
-        .major = 4, .minor = 4, \
+        .major = 4, .minor = 6, \
     }
 #define CKA_SSS_ID CKA_VENDOR_DEFINED + CKA_OBJECT_ID
 /**
@@ -87,6 +107,7 @@ extern ex_sss_cloud_ctx_t *pex_sss_demo_tls_ctx;
 #define pkcs11INVALID_OBJECT_CLASS ((CK_OBJECT_CLASS)0x0FFFFFFF)
 #define pkcs11INVALID_KEY_TYPE ((CK_KEY_TYPE)0x0FFFFFFF)
 #define MAX_ID_LIST_SIZE 200
+#define OID_START_INDEX 2
 
 /* doc:start:pkcs11-max-obj-read */
 /* Define max objects to read during C_FindObjects
@@ -183,36 +204,6 @@ extern ex_sss_cloud_ctx_t *pex_sss_demo_tls_ctx;
 /* ********************** structure definition *************** */
 
 /**
- * @brief State of the Keypair
- */
-typedef enum
-{
-    PrivateKeySize = 0, // This state returns the size of private key
-    PrivateKeyAttr,     // This state returns the attributes of private key
-    PublicKeySize,      // This state returns the size of public key
-    PublicKeyAttr,      // This state returns the attributes of public key
-} key_state_t;
-
-/**
- * @brief
- */
-typedef struct
-{
-    sss_object_t SSSObjects[USER_MAX_ID_LIST_SIZE];
-    size_t keyIdListLen;
-} SwKeyStore_t, *SwKeyStorePtr_t;
-
-/**
- * @brief Handling keypair structure.
- */
-typedef struct HandleP11KeyPair
-{
-    CK_BBOOL xSetPublicKey;
-    uint8_t keyState;
-    CK_OBJECT_HANDLE keyPairObjHandle;
-} HandleP11KeyPair_t, *HandleP11KeyPairPtr_t;
-
-/**
  * @brief Session structure.
  */
 typedef struct P11Session
@@ -227,8 +218,6 @@ typedef struct P11Session
     uint32_t xFindObjectTotalFound;
     uint16_t xFindObjectOutputOffset;
     CK_KEY_TYPE xFindObjectKeyType;
-    HandleP11KeyPairPtr_t pFindObject;
-    HandleP11KeyPairPtr_t pAttrKey;
     CK_BBOOL labelPresent;
     CK_BBOOL keyIdPresent;
     uint32_t keyId;
@@ -237,10 +226,11 @@ typedef struct P11Session
     void *mechParameter;
     CK_ULONG mechParameterLen;
     sss_digest_t digest_ctx;
-    SwKeyStorePtr_t pCurrentKs;
+    CK_FLAGS xFlags;
+    sss_mac_t ctx_hmac;
 } P11Session_t, *P11SessionPtr_t;
 
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
 /**
  * SE05x Attribute.
  */
@@ -257,7 +247,7 @@ typedef struct _se05x_object_attribute
     uint32_t version;               /**< The Secure Object version. */
     uint32_t policy_num;            /**< Number of policy */
 } se05x_object_attribute;
-#endif //#if SSS_HAVE_SE05X_VER_GTE_06_00
+#endif //#if SSS_HAVE_SE05X_VER_GTE_07_02
 
 /* ********************** FUnction declarations ********************** */
 
@@ -273,6 +263,7 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen);
 CK_RV pkcs11_ecRandSToSignature(uint8_t *rands, const size_t rands_len, uint8_t *output, size_t *outputLen);
 CK_RV pkcs11_ecPublickeyGetEcParams(uint8_t *input, size_t *dataLen);
 CK_BBOOL pkcs11_is_X509_certificate(uint32_t xObject);
+CK_RV pkcs11_is_valid_keytype(sss_algorithm_t algorithm, sss_cipher_type_t *cipher, sss_object_t *pSSSObject);
 CK_RV pkcs11_se05x_asymmetric_encrypt(P11SessionPtr_t pxSessionObj,
     sss_algorithm_t algorithm,
     CK_BYTE_PTR pData,
@@ -300,7 +291,7 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
 CK_RV pkcs11_label_to_keyId(unsigned char *label, size_t labelSize, uint32_t *keyId);
 CK_RV pkcs11_parse_certificate_get_attribute(
     uint32_t xObject, CK_ATTRIBUTE_TYPE attributeType, uint8_t *pData, CK_ULONG *ulAttrLength);
-#if SSS_HAVE_SE05X_VER_GTE_06_00
+#if SSS_HAVE_SE05X_VER_GTE_07_02
 sss_status_t pkcs11_parse_atrribute(se05x_object_attribute *pAttribute,
     uint8_t *rsp,
     size_t rspLen,
@@ -308,7 +299,7 @@ sss_status_t pkcs11_parse_atrribute(se05x_object_attribute *pAttribute,
     uint32_t cipherType,
     uint32_t policy_map,
     CK_BBOOL *pAllow);
-#endif // #if SSS_HAVE_SE05X_VER_GTE_06_00
+#endif // #if SSS_HAVE_SE05X_VER_GTE_07_02
 smStatus_t pkcs11_read_id_list(
     CK_SESSION_HANDLE xSession, uint32_t *idlist, size_t *idlistlen, CK_ULONG ulMaxObjectCount);
 sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, uint32_t *keyId);

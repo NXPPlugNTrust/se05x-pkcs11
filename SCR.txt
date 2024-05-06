@@ -1,38 +1,14 @@
 ----------------------------------
 
 NXP Software Content Register
-
-Package: se05x-pkcs11
-Version: 04.04
+Release:  se05x-pkcs11.git
+Version: 04.06
+Outgoing License: Apache-2.0
+License File: LICENSE.txt
+Description and comments: PKCS11 for EdgeLock SE05x Secure Elements
+Release Location: https://github.com/NXPPlugNTrust/se05x-pkcs11
+Origin: NXP (Apache-2.0)
+            Mbed-TLS (Apache-2.0) Version: 2.26.0 - https://github.com/Mbed-TLS/mbedtls
+            pkcs11 (MIT License) Version: 2-40-errata-1 - https://github.com/oasis-tcs/pkcs11
 
 -----------------------------------
-
-se05x-pkcs11
-- Name: se05x-pkcs11
-- Version: 04.04
-- Outgoing License:Apache 2.0
-- License File: /LICENSE.txt
-- Type of content: Source Code
-- Description: se05x pkcs11 plugin
-- Origin: Copyright 2022-2023 NXP
-- Release Location: https://github.com/NXPplugntrust/se05x-pkcs11
-
-simw_lib
-- Name: Plug&Trust Mini Package
-- Version: 04.04.00
-- Outgoing License:Apache 2.0
-- License File: /simw_lib/LICENSE.txt
-- Type of content: Source Code
-- Description: Plug&Trust Mini Package
-- Origin: Copyright 2018-2023 NXP
-- Release Location: https://github.com/NXP/plug-and-trust.git
-
-pkcs11
-- Name: pkcs11
-- Version: 03-01
-- Outgoing License: MIT
-- License File: https://github.com/oasis-tcs/pkcs11/blob/master/LICENSE.md
-- Type of content: Source Code
-- Description: PKCS11 Source Files
-- Origin:  Copyright (c) OASIS Open 2016,2019. All Rights Reserved
-- Release Location: https://github.com/oasis-tcs/pkcs11

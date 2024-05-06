@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 NXP
+ * Copyright 2021,2024 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -307,6 +307,11 @@ CK_RV pkcs11_ecPublickeyGetEcParams(uint8_t *input, size_t *inputLen)
         goto exit;
     }
 
+    if (index >= sizeof(data)) {
+        xResult = CKR_FUNCTION_FAILED;
+        goto exit;
+    }
+
     tag = data[index];
     if (tag != ASN_TAG_OBJ_IDF) {
         xResult = CKR_FUNCTION_FAILED;
@@ -336,6 +341,11 @@ CK_RV pkcs11_ecPublickeyGetEcParams(uint8_t *input, size_t *inputLen)
     ENSURE_OR_GO_EXIT((UINT_MAX - index) >= (size_t)len);
 
     if ((index + len) > *inputLen) {
+        xResult = CKR_FUNCTION_FAILED;
+        goto exit;
+    }
+
+    if (index > sizeof(data)) {
         xResult = CKR_FUNCTION_FAILED;
         goto exit;
     }
@@ -372,22 +382,10 @@ CK_RV pkcs11_se05x_asymmetric_encrypt(P11SessionPtr_t pxSessionObj,
 {
     CK_RV xResult             = CKR_FUNCTION_FAILED;
     sss_status_t status       = kStatus_SSS_Fail;
-    uint8_t data[2048]        = {0};
-    size_t dataLen            = sizeof(data);
     sss_asymmetric_t asymmCtx = {0};
     sss_object_t sss_object   = {0};
     uint8_t encData[256]      = {0};
     size_t encDataLen         = sizeof(encData);
-
-    if (pxSessionObj->xOperationInProgress == CKM_RSA_PKCS) {
-        ENSURE_OR_GO_EXIT(sizeof(data) >= (ulDataLen + 11));
-    }
-    else {
-        ENSURE_OR_GO_EXIT(sizeof(data) >= ulDataLen);
-    }
-
-    memcpy(&data[0], pData, ulDataLen);
-    dataLen = ulDataLen;
 
     ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_pkcs11_mutex_lock() == 0, xResult, CKR_CANT_LOCK);
 
@@ -403,7 +401,7 @@ CK_RV pkcs11_se05x_asymmetric_encrypt(P11SessionPtr_t pxSessionObj,
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
     /* Do Encryption */
-    status = sss_asymmetric_encrypt(&asymmCtx, &data[0], dataLen, &encData[0], &encDataLen);
+    status = sss_asymmetric_encrypt(&asymmCtx, pData, ulDataLen, &encData[0], &encDataLen);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
     if (pEncryptedData) {
@@ -452,16 +450,10 @@ CK_RV pkcs11_se05x_asymmetric_decrypt(P11SessionPtr_t pxSessionObj,
 {
     CK_RV xResult             = CKR_FUNCTION_FAILED;
     sss_status_t status       = kStatus_SSS_Fail;
-    uint8_t data[2048]        = {0};
-    size_t dataLen            = sizeof(data);
     sss_asymmetric_t asymmCtx = {0};
     sss_object_t sss_object   = {0};
     uint8_t signature[256]    = {0};
     size_t sigLen             = sizeof(signature);
-
-    ENSURE_OR_GO_EXIT(sizeof(data) >= ulEncryptedDataLen);
-    memcpy(&data[0], pEncryptedData, ulEncryptedDataLen);
-    dataLen = ulEncryptedDataLen;
 
     ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(sss_pkcs11_mutex_lock() == 0, xResult, CKR_CANT_LOCK);
 
@@ -477,7 +469,7 @@ CK_RV pkcs11_se05x_asymmetric_decrypt(P11SessionPtr_t pxSessionObj,
         &asymmCtx, &pex_sss_demo_boot_ctx->session, &sss_object, algorithm, kMode_SSS_Decrypt);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-    status = sss_asymmetric_decrypt(&asymmCtx, &data[0], dataLen, &signature[0], &sigLen);
+    status = sss_asymmetric_decrypt(&asymmCtx, pEncryptedData, ulEncryptedDataLen, &signature[0], &sigLen);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
     if (pData) {
