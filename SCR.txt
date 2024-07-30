@@ -2,7 +2,7 @@
 
 NXP Software Content Register
 Release:  se05x-pkcs11.git
-Version: 04.06
+Version: 04.07
 Outgoing License: Apache-2.0
 License File: LICENSE.txt
 Description and comments: PKCS11 for EdgeLock SE05x Secure Elements

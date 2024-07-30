@@ -486,6 +486,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_Verify)
     size_t ulDataLen_tmp             = ulDataLen;
     size_t offset                    = 0;
     uint16_t keyLen                  = 0;
+    uint16_t ecKeyLen                = 0;
+    bool secp521r1_sign              = false;
 
     ENSURE_OR_RETURN_ON_ERROR(pxSessionObj != NULL, CKR_SESSION_HANDLE_INVALID);
     /*
@@ -653,7 +655,25 @@ CK_DEFINE_FUNCTION(CK_RV, C_Verify)
         ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
         ENSURE_OR_GO_EXIT(asymmCtx.keyObject != NULL);
-        if (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) {
+        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
+            /* Check for eckey length */
+            if (pkcs11_read_object_size((uint32_t)pxSessionObj->xOperationKeyHandle, &ecKeyLen) != CKR_OK) {
+                LOG_E("Reading of object size failed !!");
+                xResult = CKR_FUNCTION_FAILED;
+                goto exit;
+            }
+        }
+        /* check for secp521r1 raw signature */
+        if (((ecKeyLen == 66) || (ecKeyLen == 65)) && (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P)){
+            if (((CK_ULONG)(ecKeyLen * 2) >= ulSignatureLen) && (ulSignatureLen >= 130)){
+                secp521r1_sign = true;
+            }
+        }
+
+        /* Check on keylength and Signature length will ensure whether signature is converted in to RandS or not */
+        if (((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) && (((CK_ULONG)(ecKeyLen * 2) == ulSignatureLen) || (secp521r1_sign))) {
             if (CKR_OK != pkcs11_ecRandSToSignature(
                               (uint8_t *)pucSignature, (size_t)ulSignatureLen, &signature_tmp[0], &signature_tmp_len)) {
                 goto exit;
@@ -885,7 +905,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_Sign)
         ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
         ENSURE_OR_GO_EXIT(asymmCtx.keyObject != NULL);
-        if (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) {
+        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
             ENSURE_OR_GO_EXIT(pkcs11_ecSignatureToRandS(signature, &sigLen) == CKR_OK);
         }
 
@@ -1392,8 +1413,18 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
     CK_ULONG attributeIndex            = 0;
     CK_MECHANISM_TYPE mechType         = 0;
     size_t KeyBitLen                   = 0;
+    sss_cipher_type_t sharedObjCipher  = kSSS_CipherType_NONE;
+    size_t keyByteLen                  = 0;
 #if SSS_HAVE_SE05X_VER_GTE_07_02
-    uint8_t derived_key_dummy[64] = {1, 2, 3};
+    uint8_t derived_key_dummy[256] = {1, 2, 3};
+    uint8_t derivedSessionKey[256] = {0};
+    size_t derivedSessionKeyLen    = sizeof(derivedSessionKey);
+    uint32_t hmac_keyId            = 0;
+    smStatus_t sm_status           = SM_NOT_OK;
+    sss_object_t hmacKeyObj        = {0};
+    sss_se05x_session_t *pSession  = (sss_se05x_session_t *)&pex_sss_demo_boot_ctx->session;
+    SE05x_Result_t IdExists        = kSE05x_Result_NA;
+    SE05x_MACAlgo_t macAlgo        = kSE05x_MACAlgo_NA;    
 #endif
 
     LOG_D("%s", __FUNCTION__);
@@ -1402,9 +1433,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
     ENSURE_OR_RETURN_ON_ERROR(pMechanism != NULL, CKR_ARGUMENTS_BAD);
 
     mechType      = pMechanism->mechanism;
-    private_keyId = (uint32_t)hBaseKey;
 
-    if (mechType != CKM_ECDH1_DERIVE) {
+    if ((mechType != CKM_ECDH1_DERIVE) && (mechType != CKM_PKCS5_PBKD2)){
         /*
          * We support ECDH and HKDF mechanisms for key derivation.
          * As per PKCS#11 v2.40, HKDF mechanism is not supported by
@@ -1417,6 +1447,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->ulParameterLen != 0, xResult, CKR_ARGUMENTS_BAD);
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->pParameter != NULL, xResult, CKR_ARGUMENTS_BAD);
 
+        private_keyId = (uint32_t)hBaseKey;
         CK_ECDH1_DERIVE_PARAMS_PTR p_ecdh1Params = (CK_ECDH1_DERIVE_PARAMS_PTR)pMechanism->pParameter;
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
             !(!p_ecdh1Params->ulPublicDataLen || !p_ecdh1Params->pPublicData), xResult, CKR_ARGUMENTS_BAD);
@@ -1439,33 +1470,33 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
             goto exit;
         }
 
-        /* Passed keytype CKK_GENERIC_SECRET or CKK_AES will create shared secret key of AES */
-        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) ==
-                CKR_OK)) {
-            if ((*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_AES) &&
-                (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_GENERIC_SECRET)) {
-                xResult = CKR_ARGUMENTS_BAD;
-                goto exit;
-            }
+        /* Passed keytype CKK_GENERIC_SECRET or CKK_AES will create shared secret key of AES/HMAC */
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) ==
+                CKR_OK), xResult, CKR_ARGUMENTS_BAD);
+
+        if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_AES){
+            sharedObjCipher = kSSS_CipherType_AES;
+        }
+        else if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_GENERIC_SECRET){
+            sharedObjCipher = kSSS_CipherType_HMAC;
         }
         else {
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
-                CKR_OK) ||
-            ((*((size_t *)pTemplate[attributeIndex].pValue) != 16) &&
-                (*((size_t *)pTemplate[attributeIndex].pValue) != 24) &&
-                (*((size_t *)pTemplate[attributeIndex].pValue) != 32) &&
-                (*((size_t *)pTemplate[attributeIndex].pValue) != 48) &&
-                (*((size_t *)pTemplate[attributeIndex].pValue) != 65) &&
-                (*((size_t *)pTemplate[attributeIndex].pValue) != 66))) {
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) ==
+         CKR_OK), xResult, CKR_ARGUMENTS_BAD);
+
+        keyByteLen = *((size_t *)pTemplate[attributeIndex].pValue);
+
+        if ((sharedObjCipher == kSSS_CipherType_AES) && ((keyByteLen != 16) && (keyByteLen != 24 ) && (keyByteLen != 32 ))){
+            LOG_E("Unsupported key length %d", keyByteLen);
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        derivedKeyLen = keyByteLen;
 
         if (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_LABEL, &attributeIndex) != CKR_OK) {
             /* Label not passed. Create random keyID */
@@ -1484,69 +1515,15 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
         ENSURE_OR_GO_EXIT(pkcs11_read_object_size(private_keyId, &keySize) == CKR_OK);
-        /* Using the ciphertype kSSS_CipherType_EC_NIST_P only as mechanism CKM_EC_KEY_PAIR_GEN is only supported */
-        if (privKeyObj.cipherType != kSSS_CipherType_EC_NIST_P) {
-            LOG_E("In the current implementation only NISTP curve is supported !!");
+        /* Using the ciphertype kSSS_CipherType_EC_NIST_P/NIST_K/BRAINPOOL only as mechanism CKM_EC_KEY_PAIR_GEN is only supported */
+        if ((privKeyObj.cipherType != kSSS_CipherType_EC_NIST_P) && (privKeyObj.cipherType != kSSS_CipherType_EC_NIST_K) &&
+            (privKeyObj.cipherType != kSSS_CipherType_EC_BRAINPOOL)) {
+            LOG_E("In the current implementation only NISTP/NISTK/BRAINPOOL curve is supported !!");
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        switch (keySize) {
-        case 24:
-            ENSURE_OR_GO_EXIT(publicKeyBufferLen >= der_ecc_secp192_header_len);
-            memcpy(publicKeyBuffer, ecc_der_header_secp192, der_ecc_secp192_header_len);
-            ENSURE_OR_GO_EXIT((publicKeyBufferLen - der_ecc_secp192_header_len) >= p_ecdh1Params->ulPublicDataLen);
-            memcpy((publicKeyBuffer + der_ecc_secp192_header_len),
-                p_ecdh1Params->pPublicData,
-                p_ecdh1Params->ulPublicDataLen);
-            publicKeyBufferLen = der_ecc_secp192_header_len + p_ecdh1Params->ulPublicDataLen;
-            KeyBitLen          = 192;
-            break;
-        case 28:
-            ENSURE_OR_GO_EXIT(publicKeyBufferLen >= der_ecc_secp224_header_len);
-            memcpy(publicKeyBuffer, ecc_der_header_secp224, der_ecc_secp224_header_len);
-            ENSURE_OR_GO_EXIT((publicKeyBufferLen - der_ecc_secp224_header_len) >= p_ecdh1Params->ulPublicDataLen);
-            memcpy((publicKeyBuffer + der_ecc_secp224_header_len),
-                p_ecdh1Params->pPublicData,
-                p_ecdh1Params->ulPublicDataLen);
-            publicKeyBufferLen = der_ecc_secp224_header_len + p_ecdh1Params->ulPublicDataLen;
-            KeyBitLen          = 224;
-            break;
-        case 32:
-            ENSURE_OR_GO_EXIT(publicKeyBufferLen >= der_ecc_secp256_header_len);
-            memcpy(publicKeyBuffer, ecc_der_header_secp256, der_ecc_secp256_header_len);
-            ENSURE_OR_GO_EXIT((publicKeyBufferLen - der_ecc_secp256_header_len) >= p_ecdh1Params->ulPublicDataLen);
-            memcpy((publicKeyBuffer + der_ecc_secp256_header_len),
-                p_ecdh1Params->pPublicData,
-                p_ecdh1Params->ulPublicDataLen);
-            publicKeyBufferLen = der_ecc_secp256_header_len + p_ecdh1Params->ulPublicDataLen;
-            KeyBitLen          = 256;
-            break;
-        case 48:
-            ENSURE_OR_GO_EXIT(publicKeyBufferLen >= der_ecc_secp384_header_len);
-            memcpy(publicKeyBuffer, ecc_der_header_secp384, der_ecc_secp384_header_len);
-            ENSURE_OR_GO_EXIT((publicKeyBufferLen - der_ecc_secp384_header_len) >= p_ecdh1Params->ulPublicDataLen);
-            memcpy((publicKeyBuffer + der_ecc_secp384_header_len),
-                p_ecdh1Params->pPublicData,
-                p_ecdh1Params->ulPublicDataLen);
-            publicKeyBufferLen = der_ecc_secp384_header_len + p_ecdh1Params->ulPublicDataLen;
-            KeyBitLen          = 384;
-            break;
-        case 65:
-        case 66:
-            ENSURE_OR_GO_EXIT(publicKeyBufferLen >= der_ecc_secp521_header_len);
-            memcpy(publicKeyBuffer, ecc_der_header_secp521, der_ecc_secp521_header_len);
-            ENSURE_OR_GO_EXIT((publicKeyBufferLen - der_ecc_secp521_header_len) >= p_ecdh1Params->ulPublicDataLen);
-            memcpy((publicKeyBuffer + der_ecc_secp521_header_len),
-                p_ecdh1Params->pPublicData,
-                p_ecdh1Params->ulPublicDataLen);
-            publicKeyBufferLen = der_ecc_secp521_header_len + p_ecdh1Params->ulPublicDataLen;
-            KeyBitLen          = 521;
-            break;
-        default:
-            xResult = CKR_ARGUMENTS_BAD;
-            goto exit;
-        }
+        ENSURE_OR_GO_EXIT(pkcs11_add_ec_header(keySize, privKeyObj.cipherType, publicKeyBuffer, &publicKeyBufferLen, p_ecdh1Params->pPublicData, p_ecdh1Params->ulPublicDataLen, &KeyBitLen) == CKR_OK);
 
         /* Import the public key now */
         ENSURE_OR_GO_EXIT(pkcs11_label_to_keyId((unsigned char *)"", 0, &public_KeyId) == CKR_OK);
@@ -1573,7 +1550,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         sss_status = sss_key_object_allocate_handle(&derivedObject,
             derivedKeyId,
             kSSS_KeyPart_Default,
-            kSSS_CipherType_AES,
+            sharedObjCipher,
             derivedKeyLen * 8,
             kKeyObject_Mode_Persistent);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
@@ -1601,6 +1578,140 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         LOG_I("KeyId for shared secret is 0x%x", derivedKeyId);
         *phKey = derivedKeyId;
     }
+#if SSS_HAVE_SE05X_VER_GTE_07_02
+    else if (mechType == CKM_PKCS5_PBKD2) {
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->ulParameterLen != 0, xResult, CKR_ARGUMENTS_BAD);
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->pParameter != NULL, xResult, CKR_ARGUMENTS_BAD);
+
+        hmac_keyId = (uint32_t)hBaseKey;
+        /* Checking and deleting the key if already present */
+        if (SM_OK == Se05x_API_CheckObjectExists(&pSession->s_ctx, hmac_keyId, &IdExists)) {
+            if (IdExists == kSE05x_Result_SUCCESS) {
+                LOG_W("Key id 0x%X already exists!!", hmac_keyId);
+                ENSURE_OR_GO_EXIT(SM_OK == Se05x_API_DeleteSecureObject(&pSession->s_ctx, hmac_keyId));
+            }
+        }
+        else {
+            LOG_E("Se05x_API_CheckObjectExists Failed !!");
+            goto exit;
+        }
+
+        CK_PKCS5_PBKD2_PARAMS2_PTR p_pbkd2Params = (CK_PKCS5_PBKD2_PARAMS2_PTR)pMechanism->pParameter;
+
+        /* Select mac algorithm based on passed params */
+        if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA1){
+            macAlgo = kSE05x_MACAlgo_HMAC_SHA1;
+        }
+        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA256){
+            macAlgo = kSE05x_MACAlgo_HMAC_SHA256;
+        }
+        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA384){
+            macAlgo = kSE05x_MACAlgo_HMAC_SHA384;
+        }
+        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA512){
+            macAlgo = kSE05x_MACAlgo_HMAC_SHA512;
+        }
+        else{
+            LOG_E("unsupported algorithm passed !!");
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_CLASS, &attributeIndex) != CKR_OK) ||
+            (*((CK_OBJECT_CLASS_PTR)pTemplate[attributeIndex].pValue) != CKO_SECRET_KEY)) {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) ==
+                CKR_OK)) {
+            if ((*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_AES) &&
+                (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_GENERIC_SECRET)) {
+                xResult = CKR_ARGUMENTS_BAD;
+                goto exit;
+            }
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
+                CKR_OK) ||
+            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)){
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+
+        if (derivedKeyLen > MAX_PBKDF_REQ_LEN){
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        if (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_LABEL, &attributeIndex) != CKR_OK) {
+            /* Label not passed. Create random keyID */
+            ENSURE_OR_GO_EXIT(CKR_OK == pkcs11_label_to_keyId((unsigned char *)"", 0, &derivedKeyId));
+        }
+        else {
+            ENSURE_OR_GO_EXIT(
+                CKR_OK == pkcs11_label_to_keyId(
+                              pTemplate[attributeIndex].pValue, pTemplate[attributeIndex].ulValueLen, &derivedKeyId));
+        }
+
+        /* Create a hmac object */
+        const sss_policy_u common = {.type = KPolicy_Common,
+            .auth_obj_id                   = 0,
+            .policy                        = {.common = {
+                                                .req_Sm     = 0,
+                                                .can_Delete = 1,
+                                                .can_Read   = 1,
+                                                .can_Write  = 1,
+                    }}};
+
+        const sss_policy_u hmackeyPol    = {.type = KPolicy_Sym_Key,
+            .auth_obj_id                       = 0,
+            .policy                            = {.symmkey = {
+                                                        .can_Write = 1,
+                                                        .can_PBKDF = 1,
+                                                        .can_KD    = 1,
+                    }}};
+
+        sss_policy_t policy_for_hmac_key = {.nPolicies = 2, .policies = {&hmackeyPol, &common}};
+
+        sss_status = sss_key_object_init(&hmacKeyObj, &pex_sss_demo_boot_ctx->ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_object_allocate_handle(
+            &hmacKeyObj, hmac_keyId, kSSS_KeyPart_Default, kSSS_CipherType_HMAC, (size_t)p_pbkd2Params->ulPasswordLen, kKeyObject_Mode_Persistent);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_store_set_key(&pex_sss_demo_boot_ctx->ks,
+            &hmacKeyObj,
+            (const uint8_t *)p_pbkd2Params->pPassword,
+            p_pbkd2Params->ulPasswordLen,
+            (p_pbkd2Params->ulPasswordLen) * 8,
+            &policy_for_hmac_key,
+            sizeof(policy_for_hmac_key));
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sm_status = Se05x_API_PBKDF2_extended(&pSession->s_ctx,
+            hmac_keyId,
+            (const uint8_t *)p_pbkd2Params->pSaltSourceData,
+            (size_t)p_pbkd2Params->ulSaltSourceDataLen,
+            0, // Salt id
+            p_pbkd2Params->iterations,
+            macAlgo,
+            derivedKeyLen,
+            derivedKeyId, // Derived Session Key id
+            derivedSessionKey,
+            &derivedSessionKeyLen);
+        ENSURE_OR_GO_EXIT(sm_status == SM_OK);
+        LOG_AU8_I(derivedSessionKey, derivedSessionKeyLen);
+        LOG_I("KeyId for derived key is 0x%x", derivedKeyId);
+        *phKey = derivedKeyId;
+    }
+#endif //SSS_HAVE_SE05X_VER_GTE_07_02
     else {
         goto exit;
     }
@@ -2009,6 +2120,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetMechanismList)
 
     CK_MECHANISM_TYPE mechanisms[] = {
         /* RSA Algorithms */
+#if SSS_HAVE_RSA
         CKM_RSA_PKCS,
         CKM_SHA1_RSA_PKCS,
         CKM_SHA224_RSA_PKCS,
@@ -2022,6 +2134,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetMechanismList)
         CKM_SHA384_RSA_PKCS_PSS,
         CKM_SHA512_RSA_PKCS_PSS,
         CKM_RSA_PKCS_OAEP,
+#endif //SSS_HAVE_RSA
         /* AES Algorithms  */
         CKM_AES_ECB,
         CKM_AES_CBC,
@@ -2041,8 +2154,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetMechanismList)
         CKM_ECDSA_SHA512,
         /* Key Generation algorithms */
         CKM_EC_KEY_PAIR_GEN,
+#if SSS_HAVE_RSA
         CKM_RSA_PKCS_KEY_PAIR_GEN,
         CKM_RSA_X_509,
+#endif //SSS_HAVE_RSA
         CKM_AES_KEY_GEN,
         CKM_DES2_KEY_GEN,
         CKM_DES3_KEY_GEN,

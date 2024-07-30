@@ -1,6 +1,17 @@
 # Changelog
 
 
+## [4.7]
+
+- **Breaking:** KeyID Handling: CKA_ID attribute (--id) passed is treated as byte array to avoid byte swapping. ID can be passed without changing the endianness now.
+
+- EC curve support extended for NIST-K and Brainpool.
+
+- PBKDF2 support added.
+
+- Bug fix: ASN-1 conversion in C_Verify function. PKCS11 implementation can now handle both raw and ASN-1 signature format for ECDSA verify.
+
+
 ## [4.6]
 
 - Extended digest operation to input data > 1024.

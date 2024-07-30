@@ -21,6 +21,12 @@ the following functionality can be made available over the pkcs11 (version 2.40)
 - HMAC
 
 
+.. note::
+
+    The multi-step operations of ECDSA Sign/Verify, RSA Sign/Verify, HMAC, all will
+    use the host crypto for multi-step digest operations of large input data.
+
+
 The SSS PKCS11 library here is tested with OpenSC pkcs11 tool.
 
 SSS PKCS11 library is tested on Raspberry Pi (Raspberry Pi 4 Model B, Ubuntu 22.04.2 LTS)
@@ -88,14 +94,21 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --keypairgen --key-type  EC
 
 ```
 
-`` Note: When passing the key id using CKA_ID attribute (--id), currently the key id has to be passed with endianness changed. Example id 12345678 has to be passed as - `--id 78563412` ``
-
 
 Supported curves
   - nist192
   - nist256
   - secp384r1
   - secp521r1
+  - secp160k1
+  - secp192k1
+  - secp256k1
+  - brainpool160r1
+  - brainpool224r1
+  - brainpool256r1
+  - brainpool320r1
+  - brainpool384r1
+  - brainpool512r1
 
 
 ### Extract public key from SE
@@ -108,18 +121,18 @@ pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --read-object --type pubkey
 ### ECDSA - Sign/Verify Operation (On hash data)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --id 010000ef --input-file scripts/input_data/data32.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA --id ef000001 --input-file scripts/input_data/data32.txt -o out.sign
 
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA --id 010000ef --input-file scripts/input_data/data32.txt --signature-file out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA --id ef000001 --input-file scripts/input_data/data32.txt --signature-file out.sign
 
 ```
 
 ### ECDSA - Sign/Verify Operation (On raw input)
 
 ```console
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --id 010000ef --input-file scripts/input_data/data1024.txt -o out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --sign --mechanism ECDSA-SHA256 --id ef000001 --input-file scripts/input_data/data1024.txt -o out.sign
 
-pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA-SHA256 --id 010000ef --input-file scripts/input_data/data1024.txt --signature-file out.sign
+pkcs11-tool --module /usr/local/lib/libsss_pkcs11.so --verify --mechanism ECDSA-SHA256 --id ef000001 --input-file scripts/input_data/data1024.txt --signature-file out.sign
 
 ```
 

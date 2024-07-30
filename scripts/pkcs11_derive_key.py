@@ -9,11 +9,21 @@ Generates derive key
 
 from pkcs11_utils import *
 
+OPENSC_UNSUPPORTED_P192 = "0.23.0"
+
 def main():
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
-    keys = {"EC:prime192v1":"0xEF000001","EC:prime256v1":"0xEF000002"}
+    opensc_version = get_opensc_version().strip()
+    if OPENSC_UNSUPPORTED_P192 in opensc_version:
+        keys = {"EC:prime256v1":"0xEF000001", "EC:prime521v1":"0xEF000002",
+                "EC:secp256k1":"0xEF000003", "EC:brainpoolP256r1":"0xEF000004",
+                "EC:brainpoolP512r1":"0xEF000005"}
+    else:
+        keys = {"EC:prime192v1":"0xEF000001","EC:prime256v1":"0xEF000002",
+                "EC:secp256k1":"0xEF000003", "EC:brainpoolP256r1":"0xEF000004",
+                "EC:brainpoolP512r1":"0xEF000005"}
 
     for key_type in keys:
         log.info("Generating keypair: %s" % (key_type))

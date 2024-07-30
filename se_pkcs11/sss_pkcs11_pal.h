@@ -68,12 +68,34 @@ extern const uint8_t ecc_der_header_secp224[];
 extern const uint8_t ecc_der_header_secp256[];
 extern const uint8_t ecc_der_header_secp384[];
 extern const uint8_t ecc_der_header_secp521[];
+extern const uint8_t ecc_der_header_secp160k1[];
+extern const uint8_t ecc_der_header_secp192k1[];
+extern const uint8_t ecc_der_header_secp224k1[];
+extern const uint8_t ecc_der_header_secp256k1[];
+extern const uint8_t ecc_der_header_bp160r1[];
+extern const uint8_t ecc_der_header_bp192r1[];
+extern const uint8_t ecc_der_header_bp224r1[];
+extern const uint8_t ecc_der_header_bp256r1[];
+extern const uint8_t ecc_der_header_bp320r1[];
+extern const uint8_t ecc_der_header_bp384r1[];
+extern const uint8_t ecc_der_header_bp512r1[];
 
 extern size_t const der_ecc_secp192_header_len;
 extern size_t const der_ecc_secp224_header_len;
 extern size_t const der_ecc_secp256_header_len;
 extern size_t const der_ecc_secp384_header_len;
 extern size_t const der_ecc_secp521_header_len;
+extern size_t const der_ecc_secp160k1_header_len;
+extern size_t const der_ecc_secp192k1_header_len;
+extern size_t const der_ecc_secp224k1_header_len;
+extern size_t const der_ecc_secp256k1_header_len;
+extern size_t const der_ecc_bp160r1_header_len;
+extern size_t const der_ecc_bp192r1_header_len;
+extern size_t const der_ecc_bp224r1_header_len;
+extern size_t const der_ecc_bp256r1_header_len;
+extern size_t const der_ecc_bp320r1_header_len;
+extern size_t const der_ecc_bp384r1_header_len;
+extern size_t const der_ecc_bp512r1_header_len;
 
 /* ********************** Defines ********************** */
 #define MAX_CACHE_OBJECT 300
@@ -91,7 +113,7 @@ extern size_t const der_ecc_secp521_header_len;
 #define PKCS11_LIBRARY_VERSION  \
     (CK_VERSION)                \
     {                           \
-        .major = 4, .minor = 6, \
+        .major = 4, .minor = 7, \
     }
 #define CKA_SSS_ID CKA_VENDOR_DEFINED + CKA_OBJECT_ID
 /**
@@ -108,6 +130,9 @@ extern size_t const der_ecc_secp521_header_len;
 #define pkcs11INVALID_KEY_TYPE ((CK_KEY_TYPE)0x0FFFFFFF)
 #define MAX_ID_LIST_SIZE 200
 #define OID_START_INDEX 2
+#define MAX_KEY_ID_LENGTH 4
+#define MAX_PBKDF_REQ_LEN 512
+#define MAX_RAW_SIGNATURE_SIZE 132
 
 /* doc:start:pkcs11-max-obj-read */
 /* Define max objects to read during C_FindObjects
@@ -201,6 +226,42 @@ extern size_t const der_ecc_secp521_header_len;
  *   iso(1) identified-organization(3) certicom(132) curve(0) 35 } */
 #define MBEDTLS_OID_EC_GRP_SECP521R1 MBEDTLS_OID_CERTICOM "\x00\x23"
 
+/* secp192k1 OBJECT IDENTIFIER ::= {
+ *   iso(1) identified-organization(3) certicom(132) curve(0) 31 } */
+#define MBEDTLS_OID_EC_GRP_SECP192K1 MBEDTLS_OID_CERTICOM "\x00\x1f"
+
+/* secp224k1 OBJECT IDENTIFIER ::= {
+ *   iso(1) identified-organization(3) certicom(132) curve(0) 32 } */
+#define MBEDTLS_OID_EC_GRP_SECP224K1 MBEDTLS_OID_CERTICOM "\x00\x20"
+
+/* secp256k1 OBJECT IDENTIFIER ::= {
+ *   iso(1) identified-organization(3) certicom(132) curve(0) 10 } */
+#define MBEDTLS_OID_EC_GRP_SECP256K1 MBEDTLS_OID_CERTICOM "\x00\x0a"
+
+/* secp160k1 */
+#define OID_EC_GRP_SECP160K1 "\x2B\x81\x04\x00\x09"
+
+/* brainpoolP160r1 */
+#define OID_EC_GRP_BP160R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x01"
+
+/* brainpoolP192r1 */
+#define OID_EC_GRP_BP192R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x03"
+
+/* brainpoolP224r1 */
+#define OID_EC_GRP_BP224R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x05"
+
+/* brainpoolP256r1 */
+#define OID_EC_GRP_BP256R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x07"
+
+/* brainpoolP320r1 */
+#define OID_EC_GRP_BP320R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x09"
+
+/* brainpoolP384r1 */
+#define OID_EC_GRP_BP384R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x0B"
+
+/* brainpoolP512r1 */
+#define OID_EC_GRP_BP512R1 "\x2B\x24\x03\x03\x02\x08\x01\x01\x0D"
+
 /* ********************** structure definition *************** */
 
 /**
@@ -220,7 +281,7 @@ typedef struct P11Session
     CK_KEY_TYPE xFindObjectKeyType;
     CK_BBOOL labelPresent;
     CK_BBOOL keyIdPresent;
-    uint32_t keyId;
+    char keyId[MAX_KEY_ID_LENGTH];
     char label[32];
     size_t labelLen;
     void *mechParameter;
@@ -302,7 +363,7 @@ sss_status_t pkcs11_parse_atrribute(se05x_object_attribute *pAttribute,
 #endif // #if SSS_HAVE_SE05X_VER_GTE_07_02
 smStatus_t pkcs11_read_id_list(
     CK_SESSION_HANDLE xSession, uint32_t *idlist, size_t *idlistlen, CK_ULONG ulMaxObjectCount);
-sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, uint32_t *keyId);
+sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, uint8_t *keyIdbuff);
 sss_status_t pkcs11_get_validated_sss_object(
     P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, sss_object_t *pSSSObject);
 P11SessionPtr_t prvSessionPointerFromHandle(CK_SESSION_HANDLE xSession);
@@ -314,6 +375,9 @@ sss_status_t pkcs11_sss_create_token(sss_key_store_t *keystore,
     U8 *buffer,
     U32 bufferLen,
     U32 bitLen);
+
+CK_RV pkcs11_get_ec_info(uint8_t *params, size_t *KeyBitLen, sss_cipher_type_t *cipher);
+CK_RV pkcs11_add_ec_header(uint16_t keySize, sss_cipher_type_t cipher, uint8_t *pubKeyBuf, size_t *pubKeyBufLen, CK_BYTE_PTR pubData, CK_ULONG pubDataLen, size_t *keyBitLen);
 
 /* Mutex handling function */
 int sss_pkcs11_mutex_init(void);

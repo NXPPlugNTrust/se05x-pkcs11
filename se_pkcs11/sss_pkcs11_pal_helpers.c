@@ -766,7 +766,7 @@ exit:
 /**
  * @brief
 */
-sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, uint32_t *keyId)
+sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT_HANDLE xObject, uint8_t *keyIdbuff)
 {
     sss_status_t sss_status = kStatus_SSS_Fail;
     sss_object_t sss_object = {0};
@@ -784,7 +784,11 @@ sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT
         for (size_t i = 0; i < MAX_CACHE_OBJECT; i++) {
             if (cache_sssObjects[i].keyId == (uint32_t)xObject) {
                 /* True */
-                *keyId     = xObject;
+                ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((UINTPTR_MAX - 4) > (uintptr_t)keyIdbuff, sss_status, kStatus_SSS_Fail);
+                *keyIdbuff++ = (uint8_t)((xObject >> 3 * 8) & 0xFF);
+                *keyIdbuff++ = (uint8_t)((xObject >> 2 * 8) & 0xFF);
+                *keyIdbuff++ = (uint8_t)((xObject >> 1 * 8) & 0xFF);
+                *keyIdbuff++ = (uint8_t)((xObject >> 0 * 8) & 0xFF);
                 sss_status = kStatus_SSS_Success;
                 break;
             }
@@ -796,7 +800,11 @@ sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT
 
         sss_status = sss_key_object_get_handle(&sss_object, xObject);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-        *keyId     = xObject;
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((UINTPTR_MAX - 4) > (uintptr_t)keyIdbuff, sss_status, kStatus_SSS_Fail);
+        *keyIdbuff++ = (uint8_t)((xObject >> 3 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 2 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 1 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 0 * 8) & 0xFF);
 
 #endif
     }
@@ -806,11 +814,15 @@ sss_status_t pkcs11_get_validated_object_id(P11SessionPtr_t pxSession, CK_OBJECT
 
         sss_status = sss_key_object_get_handle(&sss_object, xObject);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-        *keyId = xObject;
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((UINTPTR_MAX - 4) > (uintptr_t)keyIdbuff, sss_status, kStatus_SSS_Fail);
+        *keyIdbuff++ = (uint8_t)((xObject >> 3 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 2 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 1 * 8) & 0xFF);
+        *keyIdbuff++ = (uint8_t)((xObject >> 0 * 8) & 0xFF);
     }
 exit:
     if (sss_status != kStatus_SSS_Success) {
-        *keyId = 0;
+        *keyIdbuff = 0;
     }
     return sss_status;
 }
@@ -902,5 +914,337 @@ CK_RV pkcs11_is_valid_keytype(sss_algorithm_t algorithm, sss_cipher_type_t *ciph
     if (*cipher != (sss_cipher_type_t)pSSSObject->cipherType) {
         xResult = CKR_KEY_TYPE_INCONSISTENT;
     }
+    return xResult;
+}
+
+/**
+ * @brief  Get the keybitlen and ciphertype values based on the passed ec params
+ *
+ */
+CK_RV pkcs11_get_ec_info(uint8_t *params, size_t *KeyBitLen, sss_cipher_type_t *cipher)
+{
+    CK_RV xResult = CKR_ARGUMENTS_BAD;
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP192R1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP192R1) - 1) == 0) {
+        *KeyBitLen = 192;
+        *cipher = kSSS_CipherType_EC_NIST_P;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP224R1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP224R1) - 1) == 0) {
+        *KeyBitLen = 224;
+        *cipher = kSSS_CipherType_EC_NIST_P;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP256R1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP256R1) - 1) == 0) {
+        *KeyBitLen = 256;
+        *cipher = kSSS_CipherType_EC_NIST_P;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP384R1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP384R1) - 1) == 0) {
+        *KeyBitLen = 384;
+        *cipher = kSSS_CipherType_EC_NIST_P;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP521R1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP521R1) - 1) == 0) {
+        *KeyBitLen = 521;
+        *cipher = kSSS_CipherType_EC_NIST_P;
+        xResult = CKR_OK;
+        goto exit;
+    }
+    /* For NIST-K Curves */
+
+    if (memcmp(OID_EC_GRP_SECP160K1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_SECP160K1) - 1) == 0) {
+        *KeyBitLen = 160;
+        *cipher = kSSS_CipherType_EC_NIST_K;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP192K1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP192K1) - 1) == 0) {
+        *KeyBitLen = 192;
+        *cipher = kSSS_CipherType_EC_NIST_K;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP224K1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP224K1) - 1) == 0) {
+        *KeyBitLen = 224;
+        *cipher = kSSS_CipherType_EC_NIST_K;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(MBEDTLS_OID_EC_GRP_SECP256K1,
+            &params[OID_START_INDEX],
+            sizeof(MBEDTLS_OID_EC_GRP_SECP256K1) - 1) == 0) {
+        *KeyBitLen = 256;
+        *cipher = kSSS_CipherType_EC_NIST_K;
+        xResult = CKR_OK;
+        goto exit;
+    }
+    /* Brainpool curves */
+    if (memcmp(OID_EC_GRP_BP160R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP160R1) - 1) == 0) {
+        *KeyBitLen = 160;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP192R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP192R1) - 1) == 0) {
+        *KeyBitLen = 192;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP224R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP224R1) - 1) == 0) {
+        *KeyBitLen = 224;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP256R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP256R1) - 1) == 0) {
+        *KeyBitLen = 256;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP320R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP320R1) - 1) == 0) {
+        *KeyBitLen = 320;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP384R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP384R1) - 1) == 0) {
+        *KeyBitLen = 384;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+    if (memcmp(OID_EC_GRP_BP512R1,
+            &params[OID_START_INDEX],
+            sizeof(OID_EC_GRP_BP512R1) - 1) == 0) {
+        *KeyBitLen = 512;
+        *cipher = kSSS_CipherType_EC_BRAINPOOL;
+        xResult = CKR_OK;
+        goto exit;
+    }
+
+exit:
+    return xResult;
+}
+
+/**
+ * @brief  Add ecc header to the public key data based on ciphertype and keysize
+ *
+ */
+CK_RV pkcs11_add_ec_header(uint16_t keySize, sss_cipher_type_t cipher, uint8_t *pubKeyBuf, size_t *pubKeyBufLen, CK_BYTE_PTR pubData, CK_ULONG pubDataLen, size_t *keyBitLen)
+{
+    CK_RV xResult      = CKR_ARGUMENTS_BAD;
+    const uint8_t *hdr = NULL;
+    size_t hdrLen      = 0;
+
+    switch (keySize) {
+    case 20: {
+        if (cipher == kSSS_CipherType_EC_NIST_K){
+            hdr = ecc_der_header_secp160k1;
+            hdrLen = der_ecc_secp160k1_header_len;
+            *keyBitLen          = 160;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp160r1;
+            hdrLen = der_ecc_bp160r1_header_len;
+            *keyBitLen          = 160;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 24: {
+        if (cipher == kSSS_CipherType_EC_NIST_P){
+            hdr = ecc_der_header_secp192;
+            hdrLen = der_ecc_secp192_header_len;
+            *keyBitLen          = 192;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_NIST_K){
+            hdr = ecc_der_header_secp192k1;
+            hdrLen = der_ecc_secp192k1_header_len;
+            *keyBitLen          = 192;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp192r1;
+            hdrLen = der_ecc_bp192r1_header_len;
+            *keyBitLen          = 192;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 28: {
+        if (cipher == kSSS_CipherType_EC_NIST_P){
+            hdr = ecc_der_header_secp224;
+            hdrLen = der_ecc_secp224_header_len;
+            *keyBitLen          = 224;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_NIST_K){
+            hdr = ecc_der_header_secp224k1;
+            hdrLen = der_ecc_secp224k1_header_len;
+            *keyBitLen          = 224;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp224r1;
+            hdrLen = der_ecc_bp224r1_header_len;
+            *keyBitLen          = 224;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 32: {
+        if (cipher == kSSS_CipherType_EC_NIST_P){
+            hdr = ecc_der_header_secp256;
+            hdrLen = der_ecc_secp256_header_len;
+            *keyBitLen          = 256;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_NIST_K){
+            hdr = ecc_der_header_secp256k1;
+            hdrLen = der_ecc_secp256k1_header_len;
+            *keyBitLen          = 256;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp256r1;
+            hdrLen = der_ecc_bp256r1_header_len;
+            *keyBitLen          = 256;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 40: {
+        if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp320r1;
+            hdrLen = der_ecc_bp320r1_header_len;
+            *keyBitLen          = 320;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 48: {
+        if (cipher == kSSS_CipherType_EC_NIST_P){
+            hdr = ecc_der_header_secp384;
+            hdrLen = der_ecc_secp384_header_len;
+            *keyBitLen          = 384;
+            break;
+        }
+        else if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp384r1;
+            hdrLen = der_ecc_bp384r1_header_len;
+            *keyBitLen          = 384;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }        
+    }
+    case 64: {
+        if (cipher == kSSS_CipherType_EC_BRAINPOOL){
+            hdr = ecc_der_header_bp512r1;
+            hdrLen = der_ecc_bp512r1_header_len;
+            *keyBitLen          = 512;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    case 65:
+    case 66: {
+        if (cipher == kSSS_CipherType_EC_NIST_P){
+            hdr = ecc_der_header_secp521;
+            hdrLen = der_ecc_secp521_header_len;
+            *keyBitLen          = 521;
+            break;
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+    }
+    default: {
+        xResult = CKR_ARGUMENTS_BAD;
+        goto exit;
+    }
+    }
+
+    ENSURE_OR_GO_EXIT(*pubKeyBufLen >= hdrLen);
+    memcpy(pubKeyBuf, hdr, hdrLen);
+    ENSURE_OR_GO_EXIT((*pubKeyBufLen - hdrLen) >= pubDataLen);
+    memcpy((pubKeyBuf + hdrLen),
+        pubData,
+        pubDataLen);
+    *pubKeyBufLen = hdrLen + pubDataLen;
+    xResult = CKR_OK;
+
+exit:
     return xResult;
 }

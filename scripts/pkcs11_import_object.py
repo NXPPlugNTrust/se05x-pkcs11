@@ -10,9 +10,13 @@ Creates objects (Certificate, Public key and Private key)
 
 from pkcs11_utils import *
 
+OPENSC_UNSUPPORTED_VERSION = "0.23.0"
+
 def main():
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
+
+    opensc_version = get_opensc_version().strip()
 
     obj_type = "cert"
     file_name = "test_certificate.der"
@@ -46,33 +50,33 @@ def main():
     run("%s --module %s --delete-object --type %s --label sss:0xEF000003" % (pkcs11_tool, module_path, obj_type))
     log.info("###################################################")
 
+    if OPENSC_UNSUPPORTED_VERSION not in opensc_version:
+        key_len = ["2048","3072"]
+        for len in key_len:
 
-    key_len = ["2048","3072"]
-    for len in key_len:
+            obj_type = "privkey"
+            file_name = "rsa_priv_%s.pem" % (len)
+            file_dir = key_dir + os.sep + file_name
 
-        obj_type = "privkey"
-        file_name = "rsa_priv_%s.pem" % (len)
-        file_dir = key_dir + os.sep + file_name
+            log.info("Importing RSA Private key object: %s" % (file_name))
+            run("%s --module %s --write-object %s --type  %s --label sss:0xEF000001" % (pkcs11_tool, module_path, file_dir, obj_type))
+            log.info("###################################################")
 
-        log.info("Importing RSA Private key object: %s" % (file_name))
-        run("%s --module %s --write-object %s --type  %s --label sss:0xEF000001" % (pkcs11_tool, module_path, file_dir, obj_type))
-        log.info("###################################################")
+            log.info("Deleting the private key")
+            run("%s --module %s --delete-object --type %s --label sss:0xEF000001" % (pkcs11_tool, module_path, obj_type))
+            log.info("###################################################")
 
-        log.info("Deleting the private key")
-        run("%s --module %s --delete-object --type %s --label sss:0xEF000001" % (pkcs11_tool, module_path, obj_type))
-        log.info("###################################################")
+            obj_type = "pubkey"
+            file_name = "rsa_pub_%s.pem" % (len)
+            file_dir = key_dir + os.sep + file_name
 
-        obj_type = "pubkey"
-        file_name = "rsa_pub_%s.pem" % (len)
-        file_dir = key_dir + os.sep + file_name
+            log.info("Importing RSA Public key object: %s" % (file_name))
+            run("%s --module %s --write-object %s --type  %s --label sss:0xEF000001" % (pkcs11_tool, module_path, file_dir, obj_type))
+            log.info("###################################################")
 
-        log.info("Importing RSA Public key object: %s" % (file_name))
-        run("%s --module %s --write-object %s --type  %s --label sss:0xEF000001" % (pkcs11_tool, module_path, file_dir, obj_type))
-        log.info("###################################################")
-
-        log.info("Deleting the public key")
-        run("%s --module %s --delete-object --type %s --label sss:0xEF000001" % (pkcs11_tool, module_path, obj_type))
-        log.info("###################################################")
+            log.info("Deleting the public key")
+            run("%s --module %s --delete-object --type %s --label sss:0xEF000001" % (pkcs11_tool, module_path, obj_type))
+            log.info("###################################################")
 
     prime_type = ["prime192","prime256"]
     for prime in prime_type:

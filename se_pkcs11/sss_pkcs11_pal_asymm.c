@@ -81,8 +81,8 @@ CK_RV pkcs11_setASNTLV(uint8_t tag, uint8_t *component, const size_t componentLe
 CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
 {
     CK_RV xResult      = CKR_FUNCTION_FAILED;
-    uint8_t rands[128] = {0};
-    int index          = 0;
+    uint8_t rands[140] = {0};
+    size_t index       = 0;
     size_t i           = 0;
     size_t len         = 0;
     if (signature[index++] != 0x30) {
@@ -91,7 +91,18 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
     if ((*sigLen) < 2) {
         goto exit;
     }
-    if (signature[index++] != (*sigLen - 2)) {
+
+    len = signature[index++];
+    if ((len & 0x80) == 0x80) {
+        if ((len & 0x7F) == 0x01){
+            index = index + 1;
+        }
+        else if((len & 0x7F) == 0x02) {
+            index = index + 2;
+        }
+    }
+
+    if (index > *sigLen){
         goto exit;
     }
     if (signature[index++] != 0x02) {
@@ -99,9 +110,19 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
     }
 
     len = signature[index++];
+
+    if ((len & 0x42) == 0x42){
+        if ((signature[index]) == 0x00){
+            len--;
+            index++;
+        }
+    }
+
     if (len & 0x01) {
-        len--;
-        index++;
+        if ((signature[index]) == 0x00){
+            len--;
+            index++;
+        }
     }
 
     for (i = 0; i < len; i++) {
@@ -113,9 +134,19 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
     }
 
     len = signature[index++];
+
+    if ((len & 0x42) == 0x42){
+        if ((signature[index]) == 0x00){
+            len--;
+            index++;
+        }
+    }
+
     if (len & 0x01) {
-        len--;
-        index++;
+        if ((signature[index]) == 0x00){
+            len--;
+            index++;
+        }
     }
 
     len = len + i;
@@ -153,16 +184,60 @@ CK_RV pkcs11_ecRandSToSignature(uint8_t *rands, const size_t rands_len, uint8_t 
     size_t signatureLen    = sizeof(signature);
     size_t componentLen    = (rands_len) / 2;
     uint8_t tag            = ASN_TAG_INT;
-    size_t totalLen;
+    size_t totalLen        = 0;
+    size_t s_len           = 0;
+    size_t r_len           = 0;
 
-    xResult = pkcs11_setASNTLV(tag, &rands[componentLen], componentLen, signature, &signatureLen);
-    if (xResult != CKR_OK) {
-        goto exit;
+    ENSURE_OR_GO_EXIT(rands_len <= MAX_RAW_SIGNATURE_SIZE);
+    /* secp521r1 case */
+    if (rands_len >= 130){
+        /* case 1: s length is 66 bytes and r length is 65 bytes */
+        if ((rands_len == 131) && (rands[componentLen] == 0x01)){
+            s_len = componentLen + 1;
+            r_len = componentLen;
+        }
+        /* case 2: s length is 65 bytes and r length is 66 bytes */
+        else if ((rands_len == 131) && (rands[0] == 0x01)){
+            r_len = componentLen + 1;
+            s_len = componentLen;
+        }
+        /* case 3: s length is 66 bytes and r length is 64 bytes */
+        else if((rands_len == 130) && (rands[componentLen - 1] == 0x01)){
+            s_len = componentLen + 1;
+            r_len = componentLen - 1;
+        }
+        /* case 3: s length is 64 bytes and r length is 66 bytes */
+        else if((rands_len == 130) && (rands[0] == 0x01)){
+            r_len = componentLen + 1;
+            s_len = componentLen - 1;
+        }
+        /* case 4: both r and s length is 66 bytes */
+        else {
+            s_len = componentLen;
+            r_len = componentLen;
+        }
+
+        xResult = pkcs11_setASNTLV(tag, &rands[r_len], s_len, signature, &signatureLen);
+        if (xResult != CKR_OK) {
+            goto exit;
+        }
+
+        xResult = pkcs11_setASNTLV(tag, &rands[0], r_len, signature, &signatureLen);
+        if (xResult != CKR_OK) {
+            goto exit;
+        }
     }
+    else { /* for rest EC curves */
 
-    xResult = pkcs11_setASNTLV(tag, &rands[0], componentLen, signature, &signatureLen);
-    if (xResult != CKR_OK) {
-        goto exit;
+        xResult = pkcs11_setASNTLV(tag, &rands[componentLen], componentLen, signature, &signatureLen);
+        if (xResult != CKR_OK) {
+            goto exit;
+        }
+
+        xResult = pkcs11_setASNTLV(tag, &rands[0], componentLen, signature, &signatureLen);
+        if (xResult != CKR_OK) {
+            goto exit;
+        }
     }
 
     totalLen = sizeof(signature) - signatureLen;
