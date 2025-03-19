@@ -1,5 +1,5 @@
 /*
- * Copyright 2023-2024 NXP
+ * Copyright 2023-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -544,7 +544,11 @@ int pkcs11_parse_PrivateKey(
     }
     memcpy(&key_type, pTemplate[*index].pValue, pTemplate[*index].ulValueLen);
     if (key_type == CKK_RSA) {
+#if defined(PKCS11_ENABLE_RSA_KEY_GEN_CRT)
+        keyParse->cipherType = kSSS_CipherType_RSA_CRT;
+#else
         keyParse->cipherType = kSSS_CipherType_RSA;
+#endif
         CK_ULONG modulusIndex;
         xResult = pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_MODULUS, &modulusIndex);
         if (xResult != CKR_OK) {
@@ -708,7 +712,11 @@ int pkcs11_parse_PublicKey(
     }
     memcpy(&key_type, pTemplate[*index].pValue, pTemplate[*index].ulValueLen);
     if (key_type == CKK_RSA) {
+#if defined(PKCS11_ENABLE_RSA_KEY_GEN_CRT)
+        keyParse->cipherType = kSSS_CipherType_RSA_CRT;
+#else
         keyParse->cipherType = kSSS_CipherType_RSA;
+#endif
         CK_ULONG modulusIndex;
         xResult = pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_MODULUS, &modulusIndex);
         if (xResult != CKR_OK) {
@@ -785,7 +793,7 @@ int pkcs11_parse_PublicKey(
         if (keyLen <= 64) {
             keyParse->keyBitLen = keyLen * 8;
         }
-        else if ((keyLen == 66) || (keyLen == 65)){
+        else if ((keyLen == 66) || (keyLen == 65)) {
             /*ECP_DP_SECP521R1 Case*/
             keyParse->keyBitLen = 521;
         }
@@ -1198,6 +1206,11 @@ CK_RV pkcs11_create_raw_privateKey(CK_ATTRIBUTE_PTR pxTemplate, CK_ULONG ulCount
         uint8_t int_val = 0x00;
         xResult         = pkcs11_setASNTLV(tag, &int_val, 1, key, keyLen);
         if (xResult != CKR_OK) {
+            goto exit;
+        }
+
+        if (*keyLen > bufferSize_copy) {
+            xResult = CKR_FUNCTION_FAILED;
             goto exit;
         }
 

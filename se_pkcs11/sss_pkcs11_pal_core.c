@@ -1,7 +1,7 @@
 /*
  * Amazon FreeRTOS PKCS#11 for NXP Secure element
  * Copyright (C) 2017 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
- * Copyright 2018,2024 NXP
+ * Copyright 2018,2024-2025 NXP
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -37,13 +37,20 @@
 #define DEFAULT_POLICY_BIN_COUNT_PCR (POLICY_OBJ_ALLOW_DELETE | POLICY_OBJ_ALLOW_WRITE | POLICY_OBJ_ALLOW_READ)
 #define DEFAULT_POLICY_USERID (POLICY_OBJ_ALLOW_DELETE | POLICY_OBJ_ALLOW_WRITE)
 
+/* To store HKDF key on host key store, change to 1 */
+#define PKCS11_USE_HOST_KS_HKDF 0
+
 /* ********************** Global variables ********************** */
+#ifdef PKCS11_SESSION_OPEN
+static ex_sss_boot_ctx_t gex_sss_demo_boot_ctx;
+ex_sss_boot_ctx_t *pex_sss_demo_boot_ctx = &gex_sss_demo_boot_ctx;
+#endif
+
 int sessionCount         = 0;
 bool cryptokiInitialized = false;
 bool mutex_initialised   = false;
 CK_RV pkcs11_read_object_size(uint32_t keyId, uint16_t *keyLen);
 static uint8_t pkcs11_check_if_keyId_exists(uint32_t keyId, pSe05xSession_t session_ctx);
-static P11SessionPtr_t pkcs11_sessions[MAX_PKCS11_SESSIONS] = {0};
 
 /**
  * @brief PKCS#11 interface functions implemented by this Cryptoki module.
@@ -123,10 +130,7 @@ CK_FUNCTION_LIST prvP11FunctionList = {{CRYPTOKI_VERSION_MAJOR, CRYPTOKI_VERSION
  */
 P11SessionPtr_t prvSessionPointerFromHandle(CK_SESSION_HANDLE xSession)
 {
-    if ((xSession == 0) || (xSession > MAX_PKCS11_SESSIONS)) {
-        return NULL;
-    }
-    return pkcs11_sessions[xSession - 1];
+    return (P11SessionPtr_t)(uintptr_t)xSession;
 }
 
 /**
@@ -271,19 +275,21 @@ CK_DEFINE_FUNCTION(CK_RV, C_DigestFinal)
         return CKR_OK;
     }
     else {
-        if (pxSession->digestUpdateCalled != CK_TRUE) {
-            pxSession->xOperationInProgress = pkcs11NO_OPERATION;
-            xResult                         = CKR_OPERATION_ACTIVE;
-            goto exit;
-        }
         if (*pulDigestLen < outputLen) {
-            /*required length should be returned*/
+            /* Operation should not be terminated, required length should be returned*/
             *pulDigestLen = outputLen;
             return CKR_BUFFER_TOO_SMALL;
         }
+
         if (sss_pkcs11_mutex_lock() != 0) {
             pxSession->xOperationInProgress = pkcs11NO_OPERATION;
             xResult                         = CKR_CANT_LOCK;
+            goto exit;
+        }
+
+        if (pxSession->digestUpdateCalled != CK_TRUE) {
+            pxSession->xOperationInProgress = pkcs11NO_OPERATION;
+            xResult                         = CKR_OPERATION_ACTIVE;
             goto exit;
         }
 
@@ -321,9 +327,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_DigestUpdate)
     size_t offset             = 0;
 
     ENSURE_OR_RETURN_ON_ERROR(pxSession != NULL, CKR_SESSION_HANDLE_INVALID);
-    ENSURE_OR_RETURN_ON_ERROR(pxSession->xOperationInProgress != pkcs11NO_OPERATION, CKR_OPERATION_NOT_INITIALIZED);
-
     ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
+    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
+        pxSession->xOperationInProgress != pkcs11NO_OPERATION, xResult, CKR_OPERATION_NOT_INITIALIZED);
 
     if (pxSession->digestUpdateCalled != CK_TRUE) {
         sss_status = sss_digest_init(&pxSession->digest_ctx);
@@ -336,7 +342,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DigestUpdate)
         sss_status = sss_digest_update(&pxSession->digest_ctx, pPart + offset, chunk);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
-        ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+        ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
         offset += chunk;
         ulPartLen -= chunk;
     } while (ulPartLen > 0);
@@ -370,16 +376,18 @@ CK_DEFINE_FUNCTION(CK_RV, C_DigestInit)
 
     ENSURE_OR_RETURN_ON_ERROR(pxSession != NULL, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(pMechanism != NULL, CKR_ARGUMENTS_BAD);
-    ENSURE_OR_RETURN_ON_ERROR(pxSession->xOperationInProgress == pkcs11NO_OPERATION, CKR_SESSION_HANDLE_INVALID);
+    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
+
+    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
+        pxSession->xOperationInProgress == pkcs11NO_OPERATION, xResult, CKR_SESSION_HANDLE_INVALID);
 
     pxSession->xOperationInProgress = pMechanism->mechanism;
 
     if (pkcs11_parse_digest_mechanism(pxSession, &algorithm) != CKR_OK) {
         pxSession->xOperationInProgress = pkcs11NO_OPERATION;
-        return CKR_MECHANISM_INVALID;
+        xResult                         = CKR_MECHANISM_INVALID;
+        goto exit;
     }
-
-    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
 #if SSS_HAVE_APPLET
     LOG_W("This will cause NVM flash writes !!");
@@ -389,7 +397,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DigestInit)
     sss_status = sss_digest_context_init(
         &pxSession->digest_ctx, &pex_sss_demo_boot_ctx->host_session, algorithm, kMode_SSS_Digest);
 #else
-    sss_status         = kStatus_SSS_Fail;
+    sss_status = kStatus_SSS_Fail;
 #endif
     ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
@@ -423,7 +431,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateRandom)
     sss_rng_context_t sss_rng_ctx = {0};
 
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
-    ENSURE_OR_RETURN_ON_ERROR(xSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
 
     if (NULL == pucRandomData) {
         return CKR_ARGUMENTS_BAD;
@@ -442,7 +449,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateRandom)
 #elif SSS_HAVE_HOSTCRYPTO_ANY
     sss_status = sss_host_rng_context_init(&sss_rng_ctx, &pex_sss_demo_boot_ctx->host_session /* host Session */);
 #else
-    sss_status         = kStatus_SSS_Fail;
+    sss_status = kStatus_SSS_Fail;
 #endif
     ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
@@ -630,7 +637,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_Verify)
                 status = sss_mac_update(&ctx_hmac, &data[0] + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 dataLen -= chunk;
             } while (dataLen > 0);
@@ -655,7 +662,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_Verify)
         ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
         ENSURE_OR_GO_EXIT(asymmCtx.keyObject != NULL);
-        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) ||
+            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
             (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
             /* Check for eckey length */
             if (pkcs11_read_object_size((uint32_t)pxSessionObj->xOperationKeyHandle, &ecKeyLen) != CKR_OK) {
@@ -665,15 +673,17 @@ CK_DEFINE_FUNCTION(CK_RV, C_Verify)
             }
         }
         /* check for secp521r1 raw signature */
-        if (((ecKeyLen == 66) || (ecKeyLen == 65)) && (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P)){
-            if (((CK_ULONG)(ecKeyLen * 2) >= ulSignatureLen) && (ulSignatureLen >= 130)){
+        if (((ecKeyLen == 66) || (ecKeyLen == 65)) && (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P)) {
+            if (((CK_ULONG)(ecKeyLen * 2) >= ulSignatureLen) && (ulSignatureLen >= 130)) {
                 secp521r1_sign = true;
             }
         }
 
         /* Check on keylength and Signature length will ensure whether signature is converted in to RandS or not */
-        if (((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
-            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) && (((CK_ULONG)(ecKeyLen * 2) == ulSignatureLen) || (secp521r1_sign))) {
+        if (((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) ||
+                (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+                (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) &&
+            (((CK_ULONG)(ecKeyLen * 2) == ulSignatureLen) || (secp521r1_sign))) {
             if (CKR_OK != pkcs11_ecRandSToSignature(
                               (uint8_t *)pucSignature, (size_t)ulSignatureLen, &signature_tmp[0], &signature_tmp_len)) {
                 goto exit;
@@ -852,7 +862,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_Sign)
     status = sss_key_object_init(&object, &pex_sss_demo_boot_ctx->ks);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-    ENSURE_OR_GO_EXIT((pxSessionObj->xOperationKeyHandle) <= UINT_MAX);
+    ENSURE_OR_GO_EXIT((pxSessionObj->xOperationKeyHandle) <= SIZE_MAX);
 
     status = sss_key_object_get_handle(&object, (uint32_t)pxSessionObj->xOperationKeyHandle);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
@@ -875,7 +885,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_Sign)
                 status = sss_mac_update(&ctx_hmac, &data[0] + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 dataLen -= chunk;
             } while (dataLen > 0);
@@ -905,7 +915,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_Sign)
         ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
         ENSURE_OR_GO_EXIT(asymmCtx.keyObject != NULL);
-        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) || (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
+        if ((asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_P) ||
+            (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_NIST_K) ||
             (asymmCtx.keyObject->cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
             ENSURE_OR_GO_EXIT(pkcs11_ecSignatureToRandS(signature, &sigLen) == CKR_OK);
         }
@@ -928,6 +939,9 @@ exit:
     }
     if (asymmCtx.session != NULL) {
         sss_asymmetric_context_free(&asymmCtx);
+    }
+    if (object.keyStore) {
+        sss_key_object_free(&object);
     }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
@@ -1043,8 +1057,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
     AX_UNUSED_ARG(xNotify);
     CK_RV xResult                = CKR_FUNCTION_FAILED;
     P11SessionPtr_t pxSessionObj = NULL;
-    bool foundEmptySessionSlot   = false;
-    size_t i                     = 0;
 
     LOG_D("%s", __FUNCTION__);
 
@@ -1080,21 +1092,11 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
     pxSessionObj->xOpened = CK_TRUE;
     pxSessionObj->xFlags  = xFlags;
 
-    for (i = 0; i < MAX_PKCS11_SESSIONS; i++) {
-        if (pkcs11_sessions[i] == NULL) {
-            foundEmptySessionSlot = true;
-            break;
-        }
-    }
+    /*
+    * Return the session.
+    */
 
-    if (foundEmptySessionSlot == true) {
-        pkcs11_sessions[i] = pxSessionObj;
-        *pxSession         = (CK_SESSION_HANDLE)(i + 1); // To skip session_id 0
-    }
-    else {
-        xResult = CKR_DEVICE_MEMORY;
-        goto exit;
-    }
+    *pxSession = (CK_SESSION_HANDLE)(uintptr_t)pxSessionObj;
 
     pxSessionObj->xOperationInProgress = pkcs11NO_OPERATION;
 
@@ -1151,23 +1153,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
 #endif
         sss_status = ex_sss_key_store_and_object_init(pex_sss_demo_boot_ctx);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-
-#if SSS_PKCS11_ENABLE_CLOUD_DEMO
-#if SSS_HAVE_HOSTCRYPTO_ANY
-        pex_sss_demo_tls_ctx->pHost_ks = &pex_sss_demo_boot_ctx->host_ks;
-#endif
-        sss_status = sss_key_object_init(&pex_sss_demo_tls_ctx->obj, &pex_sss_demo_boot_ctx->ks);
-        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-
-        sss_status = sss_key_object_init(&pex_sss_demo_tls_ctx->dev_cert, &pex_sss_demo_boot_ctx->ks);
-        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-
-        sss_status = sss_key_object_init(&pex_sss_demo_tls_ctx->interCaCert, &pex_sss_demo_boot_ctx->ks);
-        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-
-        sss_status = sss_key_object_init(&pex_sss_demo_tls_ctx->pub_obj, &pex_sss_demo_boot_ctx->ks);
-        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
-#endif
     }
 #endif
 
@@ -1182,14 +1167,9 @@ exit:
             SSS_FREE(pxSessionObj);
 #endif
         }
-        if (pex_sss_demo_boot_ctx->session.subsystem != kType_SSS_SubSystem_NONE) {
+        if (pex_sss_demo_boot_ctx != NULL) {
             ex_sss_session_close(pex_sss_demo_boot_ctx);
         }
-#if SSS_HAVE_HOSTCRYPTO_ANY
-        if ((pex_sss_demo_boot_ctx->host_session.subsystem) != kType_SSS_SubSystem_NONE) {
-            sss_host_session_close(&pex_sss_demo_boot_ctx->host_session);
-        }
-#endif
     }
 #ifdef PKCS11_SESSION_OPEN
     /* Unlock for session open - required because multiple session_open will be attempted */
@@ -1223,33 +1203,23 @@ CK_DEFINE_FUNCTION(CK_RV, C_CloseSession)(CK_SESSION_HANDLE xSession)
     SSS_FREE(pxSession);
 #endif
 
-    pkcs11_sessions[xSession - 1] = NULL;
-
 #ifdef PKCS11_SESSION_OPEN
-    if (sessionCount == 1) {
-        if (sss_pkcs11_mutex_lock() != 0) {
-            xResult = CKR_CANT_LOCK;
-            return xResult;
-        }
-#if SSS_PKCS11_ENABLE_CLOUD_DEMO
-        sss_key_object_free(&pex_sss_demo_tls_ctx->obj);
-        sss_key_object_free(&pex_sss_demo_tls_ctx->dev_cert);
-        sss_key_object_free(&pex_sss_demo_tls_ctx->interCaCert);
-        sss_key_object_free(&pex_sss_demo_tls_ctx->pub_obj);
-#endif
-        ex_sss_session_close(pex_sss_demo_boot_ctx);
-#if SSS_HAVE_HOSTCRYPTO_ANY
-        if ((pex_sss_demo_boot_ctx->host_session.subsystem) != kType_SSS_SubSystem_NONE) {
-            sss_host_session_close(&pex_sss_demo_boot_ctx->host_session);
-        }
-#endif
-        if (sss_pkcs11_mutex_unlock() != 0) {
-            LOG_W("sss_pkcs11_mutex_unlock failed ");
-        }
+
+    if (sss_pkcs11_mutex_lock() != 0) {
+        xResult = CKR_CANT_LOCK;
+        return xResult;
     }
-#endif
+
+    if (sessionCount == 1) {
+        ex_sss_session_close(pex_sss_demo_boot_ctx);
+    }
 
     sessionCount--;
+
+    if (sss_pkcs11_mutex_unlock() != 0) {
+        LOG_W("sss_pkcs11_mutex_unlock failed ");
+    }
+#endif
 
     return xResult;
 }
@@ -1424,30 +1394,41 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
     sss_object_t hmacKeyObj        = {0};
     sss_se05x_session_t *pSession  = (sss_se05x_session_t *)&pex_sss_demo_boot_ctx->session;
     SE05x_Result_t IdExists        = kSE05x_Result_NA;
-    SE05x_MACAlgo_t macAlgo        = kSE05x_MACAlgo_NA;    
+    SE05x_MACAlgo_t macAlgo        = kSE05x_MACAlgo_NA;
+#if defined(CRYPTOKI_VERSION_MAJOR) && (CRYPTOKI_VERSION_MAJOR >= 0x03)
+    sss_algorithm_t algo    = kAlgorithm_None;
+    sss_mode_t mode         = kMode_SSS_HKDF_ExtractExpand;
+    CK_BBOOL saltIdPresent  = CK_FALSE;
+    sss_object_t saltKeyObj = {0};
+#if PKCS11_USE_HOST_KS_HKDF
+    uint8_t hkdfKey[256]  = {0};
+    size_t hkdfLen        = sizeof(hkdfKey);
+    size_t hkdfKeyLenBits = sizeof(hkdfKey) * 8;
+#endif
+#endif
 #endif
 
     LOG_D("%s", __FUNCTION__);
-    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
     ENSURE_OR_RETURN_ON_ERROR(hBaseKey <= UINT32_MAX, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(pMechanism != NULL, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
-    mechType      = pMechanism->mechanism;
+    mechType = pMechanism->mechanism;
 
-    if ((mechType != CKM_ECDH1_DERIVE) && (mechType != CKM_PKCS5_PBKD2)){
-        /*
-         * We support ECDH and HKDF mechanisms for key derivation.
-         * As per PKCS#11 v2.40, HKDF mechanism is not supported by
-         * PKCS#11. CKM_HKDF_DERIVE is added in PKCS#11 v3.0
-         */
-        return CKR_MECHANISM_INVALID;
+    if ((mechType != CKM_ECDH1_DERIVE) && (mechType != CKM_PKCS5_PBKD2)
+#if defined(CRYPTOKI_VERSION_MAJOR) && (CRYPTOKI_VERSION_MAJOR >= 0x03)
+        && (mechType != CKM_HKDF_DERIVE)
+#endif
+    ) {
+        xResult = CKR_MECHANISM_INVALID;
+        goto exit;
     }
 
     if (mechType == CKM_ECDH1_DERIVE) {
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->ulParameterLen != 0, xResult, CKR_ARGUMENTS_BAD);
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->pParameter != NULL, xResult, CKR_ARGUMENTS_BAD);
 
-        private_keyId = (uint32_t)hBaseKey;
+        private_keyId                            = (uint32_t)hBaseKey;
         CK_ECDH1_DERIVE_PARAMS_PTR p_ecdh1Params = (CK_ECDH1_DERIVE_PARAMS_PTR)pMechanism->pParameter;
         ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
             !(!p_ecdh1Params->ulPublicDataLen || !p_ecdh1Params->pPublicData), xResult, CKR_ARGUMENTS_BAD);
@@ -1471,13 +1452,15 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         }
 
         /* Passed keytype CKK_GENERIC_SECRET or CKK_AES will create shared secret key of AES/HMAC */
-        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) ==
-                CKR_OK), xResult, CKR_ARGUMENTS_BAD);
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((pkcs11_get_attribute_parameter_index(
+                                                 pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) == CKR_OK),
+            xResult,
+            CKR_ARGUMENTS_BAD);
 
-        if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_AES){
+        if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_AES) {
             sharedObjCipher = kSSS_CipherType_AES;
         }
-        else if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_GENERIC_SECRET){
+        else if (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) == CKK_GENERIC_SECRET) {
             sharedObjCipher = kSSS_CipherType_HMAC;
         }
         else {
@@ -1485,13 +1468,17 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
             goto exit;
         }
 
-        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) ==
-         CKR_OK), xResult, CKR_ARGUMENTS_BAD);
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
+            (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) ==
+                CKR_OK),
+            xResult,
+            CKR_ARGUMENTS_BAD);
 
         keyByteLen = *((size_t *)pTemplate[attributeIndex].pValue);
 
-        if ((sharedObjCipher == kSSS_CipherType_AES) && ((keyByteLen != 16) && (keyByteLen != 24 ) && (keyByteLen != 32 ))){
-            LOG_E("Unsupported key length %d", keyByteLen);
+        if ((sharedObjCipher == kSSS_CipherType_AES) &&
+            ((keyByteLen != 16) && (keyByteLen != 24) && (keyByteLen != 32))) {
+            LOG_E("Unsupported key length %lu", keyByteLen);
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
@@ -1516,14 +1503,21 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
 
         ENSURE_OR_GO_EXIT(pkcs11_read_object_size(private_keyId, &keySize) == CKR_OK);
         /* Using the ciphertype kSSS_CipherType_EC_NIST_P/NIST_K/BRAINPOOL only as mechanism CKM_EC_KEY_PAIR_GEN is only supported */
-        if ((privKeyObj.cipherType != kSSS_CipherType_EC_NIST_P) && (privKeyObj.cipherType != kSSS_CipherType_EC_NIST_K) &&
+        if ((privKeyObj.cipherType != kSSS_CipherType_EC_NIST_P) &&
+            (privKeyObj.cipherType != kSSS_CipherType_EC_NIST_K) &&
             (privKeyObj.cipherType != kSSS_CipherType_EC_BRAINPOOL)) {
             LOG_E("In the current implementation only NISTP/NISTK/BRAINPOOL curve is supported !!");
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        ENSURE_OR_GO_EXIT(pkcs11_add_ec_header(keySize, privKeyObj.cipherType, publicKeyBuffer, &publicKeyBufferLen, p_ecdh1Params->pPublicData, p_ecdh1Params->ulPublicDataLen, &KeyBitLen) == CKR_OK);
+        ENSURE_OR_GO_EXIT(pkcs11_add_ec_header(keySize,
+                              privKeyObj.cipherType,
+                              publicKeyBuffer,
+                              &publicKeyBufferLen,
+                              p_ecdh1Params->pPublicData,
+                              p_ecdh1Params->ulPublicDataLen,
+                              &KeyBitLen) == CKR_OK);
 
         /* Import the public key now */
         ENSURE_OR_GO_EXIT(pkcs11_label_to_keyId((unsigned char *)"", 0, &public_KeyId) == CKR_OK);
@@ -1599,19 +1593,19 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         CK_PKCS5_PBKD2_PARAMS2_PTR p_pbkd2Params = (CK_PKCS5_PBKD2_PARAMS2_PTR)pMechanism->pParameter;
 
         /* Select mac algorithm based on passed params */
-        if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA1){
+        if (p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA1) {
             macAlgo = kSE05x_MACAlgo_HMAC_SHA1;
         }
-        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA256){
+        else if (p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA256) {
             macAlgo = kSE05x_MACAlgo_HMAC_SHA256;
         }
-        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA384){
+        else if (p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA384) {
             macAlgo = kSE05x_MACAlgo_HMAC_SHA384;
         }
-        else if(p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA512){
+        else if (p_pbkd2Params->prf == CKP_PKCS5_PBKD2_HMAC_SHA512) {
             macAlgo = kSE05x_MACAlgo_HMAC_SHA512;
         }
-        else{
+        else {
             LOG_E("unsupported algorithm passed !!");
             goto exit;
         }
@@ -1637,14 +1631,14 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
 
         if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
                 CKR_OK) ||
-            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)){
+            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)) {
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
         derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
 
-        if (derivedKeyLen > MAX_PBKDF_REQ_LEN){
+        if (derivedKeyLen > MAX_PBKDF_REQ_LEN) {
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
@@ -1663,27 +1657,31 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         const sss_policy_u common = {.type = KPolicy_Common,
             .auth_obj_id                   = 0,
             .policy                        = {.common = {
-                                                .req_Sm     = 0,
-                                                .can_Delete = 1,
-                                                .can_Read   = 1,
-                                                .can_Write  = 1,
-                    }}};
+                           .req_Sm     = 0,
+                           .can_Delete = 1,
+                           .can_Read   = 1,
+                           .can_Write  = 1,
+                       }}};
 
-        const sss_policy_u hmackeyPol    = {.type = KPolicy_Sym_Key,
+        const sss_policy_u hmackeyPol = {.type = KPolicy_Sym_Key,
             .auth_obj_id                       = 0,
             .policy                            = {.symmkey = {
-                                                        .can_Write = 1,
-                                                        .can_PBKDF = 1,
-                                                        .can_KD    = 1,
-                    }}};
+                           .can_Write = 1,
+                           .can_PBKDF = 1,
+                           .can_KD    = 1,
+                       }}};
 
         sss_policy_t policy_for_hmac_key = {.nPolicies = 2, .policies = {&hmackeyPol, &common}};
 
         sss_status = sss_key_object_init(&hmacKeyObj, &pex_sss_demo_boot_ctx->ks);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
-        sss_status = sss_key_object_allocate_handle(
-            &hmacKeyObj, hmac_keyId, kSSS_KeyPart_Default, kSSS_CipherType_HMAC, (size_t)p_pbkd2Params->ulPasswordLen, kKeyObject_Mode_Persistent);
+        sss_status = sss_key_object_allocate_handle(&hmacKeyObj,
+            hmac_keyId,
+            kSSS_KeyPart_Default,
+            kSSS_CipherType_HMAC,
+            (size_t)p_pbkd2Params->ulPasswordLen,
+            kKeyObject_Mode_Persistent);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
 
         sss_status = sss_key_store_set_key(&pex_sss_demo_boot_ctx->ks,
@@ -1694,13 +1692,14 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
             &policy_for_hmac_key,
             sizeof(policy_for_hmac_key));
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        ENSURE_OR_GO_EXIT((p_pbkd2Params->iterations) <= UINT16_MAX);
 
         sm_status = Se05x_API_PBKDF2_extended(&pSession->s_ctx,
             hmac_keyId,
             (const uint8_t *)p_pbkd2Params->pSaltSourceData,
             (size_t)p_pbkd2Params->ulSaltSourceDataLen,
             0, // Salt id
-            p_pbkd2Params->iterations,
+            (uint16_t)p_pbkd2Params->iterations,
             macAlgo,
             derivedKeyLen,
             derivedKeyId, // Derived Session Key id
@@ -1711,11 +1710,190 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
         LOG_I("KeyId for derived key is 0x%x", derivedKeyId);
         *phKey = derivedKeyId;
     }
+
+#if defined(CRYPTOKI_VERSION_MAJOR) && (CRYPTOKI_VERSION_MAJOR >= 0x03)
+    else if (mechType == CKM_HKDF_DERIVE) {
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->ulParameterLen != 0, xResult, CKR_ARGUMENTS_BAD);
+        ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(pMechanism->pParameter != NULL, xResult, CKR_ARGUMENTS_BAD);
+
+        hmac_keyId = (uint32_t)hBaseKey;
+
+        if (!pkcs11_check_if_keyId_exists(hmac_keyId, &se05x_session->s_ctx)) {
+            xResult = CKR_KEY_HANDLE_INVALID;
+            goto exit;
+        }
+
+        CK_HKDF_PARAMS_PTR p_hkdfParams = (CK_HKDF_PARAMS_PTR)pMechanism->pParameter;
+
+        /* Select mac algorithm based on passed params */
+        if (p_hkdfParams->prfHashMechanism == CKM_SHA224_HMAC) {
+            algo = kAlgorithm_SSS_HMAC_SHA224;
+        }
+        else if (p_hkdfParams->prfHashMechanism == CKM_SHA256_HMAC) {
+            algo = kAlgorithm_SSS_HMAC_SHA256;
+        }
+        else if (p_hkdfParams->prfHashMechanism == CKM_SHA384_HMAC) {
+            algo = kAlgorithm_SSS_HMAC_SHA384;
+        }
+        else if (p_hkdfParams->prfHashMechanism == CKM_SHA512_HMAC) {
+            algo = kAlgorithm_SSS_HMAC_SHA512;
+        }
+        else {
+            LOG_E("unsupported algorithm passed !!");
+            goto exit;
+        }
+
+        if ((p_hkdfParams->bExpand == true) && (p_hkdfParams->bExtract == false)) {
+            mode = kMode_SSS_HKDF_ExpandOnly;
+        }
+        else if ((p_hkdfParams->bExpand == true) && (p_hkdfParams->bExtract == true)) {
+            mode = kMode_SSS_HKDF_ExtractExpand;
+        }
+        else {
+            LOG_E("unsupported hkdf mode passed !!");
+            goto exit;
+        }
+
+        if (p_hkdfParams->ulSaltType == CKF_HKDF_SALT_DATA) {
+            saltIdPresent = CK_FALSE;
+        }
+        else if (p_hkdfParams->ulSaltType == CKF_HKDF_SALT_KEY) {
+            saltIdPresent = CK_TRUE;
+            if (!pkcs11_check_if_keyId_exists((uint32_t)p_hkdfParams->hSaltKey, &se05x_session->s_ctx)) {
+                xResult = CKR_KEY_HANDLE_INVALID;
+                LOG_E("Salt key doesn't exists !");
+                goto exit;
+            }
+        }
+        else {
+            LOG_E("salt is not provided !!");
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_CLASS, &attributeIndex) != CKR_OK) ||
+            (*((CK_OBJECT_CLASS_PTR)pTemplate[attributeIndex].pValue) != CKO_SECRET_KEY)) {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_KEY_TYPE, &attributeIndex) ==
+                CKR_OK)) {
+            if ((*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_HKDF) &&
+                (*((CK_KEY_TYPE *)pTemplate[attributeIndex].pValue) != CKK_GENERIC_SECRET)) {
+                xResult = CKR_ARGUMENTS_BAD;
+                goto exit;
+            }
+        }
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
+                CKR_OK) ||
+            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)) {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+
+        derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+
+        if (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_LABEL, &attributeIndex) != CKR_OK) {
+            /* Label not passed */
+            LOG_E(" Label is not provided !!");
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
+        else {
+            ENSURE_OR_GO_EXIT(
+                CKR_OK == pkcs11_label_to_keyId(
+                              pTemplate[attributeIndex].pValue, pTemplate[attributeIndex].ulValueLen, &derivedKeyId));
+        }
+
+        sss_status = sss_key_object_init(&hmacKeyObj, &pex_sss_demo_boot_ctx->ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_object_get_handle(&hmacKeyObj, hmac_keyId);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+#if PKCS11_USE_HOST_KS_HKDF
+        sss_status = sss_key_store_context_init(&pex_sss_demo_boot_ctx->host_ks, &pex_sss_demo_boot_ctx->host_session);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_store_allocate(&pex_sss_demo_boot_ctx->host_ks, __LINE__);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        sss_status = sss_key_object_init(&derivedObject, &pex_sss_demo_boot_ctx->host_ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+#else
+        sss_status = sss_key_object_init(&derivedObject, &pex_sss_demo_boot_ctx->ks);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+#endif
+
+        sss_status = sss_key_object_allocate_handle(&derivedObject,
+            derivedKeyId,
+            kSSS_KeyPart_Default,
+            kSSS_CipherType_HMAC,
+            derivedKeyLen,
+            kKeyObject_Mode_Persistent);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+#if !PKCS11_USE_HOST_KS_HKDF
+        if (!(sizeof(derived_key_dummy) >= derivedKeyLen)) {
+            xResult = CKR_BUFFER_TOO_SMALL;
+            goto exit;
+        }
+        sss_status = sss_key_store_set_key(
+            &pex_sss_demo_boot_ctx->ks, &derivedObject, derived_key_dummy, derivedKeyLen, derivedKeyLen * 8, NULL, 0);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+#endif
+
+        sss_status =
+            sss_derive_key_context_init(&ctx_derive_key, &pex_sss_demo_boot_ctx->session, &hmacKeyObj, algo, mode);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+        if (saltIdPresent) {
+            sss_status = sss_key_object_init(&saltKeyObj, &pex_sss_demo_boot_ctx->ks);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+            sss_status = sss_key_object_get_handle(&saltKeyObj, (uint32_t)p_hkdfParams->hSaltKey);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+
+            sss_status = sss_derive_key_sobj_one_go(&ctx_derive_key,
+                &saltKeyObj,
+                (const uint8_t *)p_hkdfParams->pInfo,
+                (size_t)p_hkdfParams->ulInfoLen,
+                &derivedObject,
+                derivedKeyLen);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        }
+        else {
+            sss_status = sss_derive_key_one_go(&ctx_derive_key,
+                (const uint8_t *)p_hkdfParams->pSalt,
+                (size_t)p_hkdfParams->ulSaltLen,
+                (const uint8_t *)p_hkdfParams->pInfo,
+                (size_t)p_hkdfParams->ulInfoLen,
+                &derivedObject,
+                derivedKeyLen);
+            ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        }
+
+#if PKCS11_USE_HOST_KS_HKDF
+        sss_status =
+            sss_key_store_get_key(&pex_sss_demo_boot_ctx->host_ks, &derivedObject, hkdfKey, &hkdfLen, &hkdfKeyLenBits);
+        ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
+        LOG_MAU8_I("hkdfOutput", hkdfKey, hkdfLen);
+#endif
+        LOG_I("KeyId for hkdf is 0x%x", derivedKeyId);
+
+        *phKey = derivedKeyId;
+    }
+#endif //#if defined(CRYPTOKI_VERSION_MAJOR) && (CRYPTOKI_VERSION_MAJOR >= 0x03)
 #endif //SSS_HAVE_SE05X_VER_GTE_07_02
     else {
         goto exit;
     }
-
     xResult = CKR_OK;
 exit:
     if (sss_status != kStatus_SSS_Success) {
@@ -1724,9 +1902,17 @@ exit:
     if (pubKeyObj.keyStore) {
         sss_key_store_erase_key(pubKeyObj.keyStore, &pubKeyObj);
     }
+    if (privKeyObj.keyStore) {
+        sss_key_object_free(&privKeyObj);
+    }
     if (ctx_derive_key.session != NULL) {
         sss_derive_key_context_free(&ctx_derive_key);
     }
+#if PKCS11_USE_HOST_KS_HKDF
+    if (pex_sss_demo_boot_ctx->host_ks.session != NULL) {
+        sss_key_store_context_free(&pex_sss_demo_boot_ctx->host_ks);
+    }
+#endif
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
     }
@@ -1820,7 +2006,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_Digest)
                 status = sss_digest_update(&pxSessionObj->digest_ctx, pData + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 inputLen -= chunk;
             } while (inputLen > 0);
@@ -2119,7 +2305,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetMechanismList)
     ENSURE_OR_RETURN_ON_ERROR(pulCount != NULL, CKR_ARGUMENTS_BAD);
 
     CK_MECHANISM_TYPE mechanisms[] = {
-        /* RSA Algorithms */
+    /* RSA Algorithms */
 #if SSS_HAVE_RSA
         CKM_RSA_PKCS,
         CKM_SHA1_RSA_PKCS,
@@ -2283,7 +2469,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_SeedRandom)
     AX_UNUSED_ARG(ulSeedLen);
     LOG_D("%s", __FUNCTION__);
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
-    ENSURE_OR_RETURN_ON_ERROR(hSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(pSeed != NULL, CKR_ARGUMENTS_BAD);
     /* Nothing is done */
     return CKR_OK;
@@ -2411,7 +2596,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_SignUpdate)
                 status = sss_mac_update(&pxSessionObj->ctx_hmac, pPart + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 ulPartLen -= chunk;
             } while (ulPartLen > 0);
@@ -2438,7 +2623,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_SignUpdate)
                 status = sss_digest_update(&pxSessionObj->digest_ctx, pPart + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 ulPartLen -= chunk;
             } while (ulPartLen > 0);
@@ -2569,6 +2754,9 @@ exit:
     if (pxSessionObj->digest_ctx.session != NULL) {
         sss_digest_context_free(&pxSessionObj->digest_ctx);
     }
+    if (object.keyStore) {
+        sss_key_object_free(&object);
+    }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
     }
@@ -2633,7 +2821,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_VerifyUpdate)
                 status = sss_mac_update(&pxSessionObj->ctx_hmac, pPart + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                ENSURE_OR_GO_EXIT((UINT_MAX - offset) >= chunk);
+                ENSURE_OR_GO_EXIT((SIZE_MAX - offset) >= chunk);
                 offset += chunk;
                 ulPartLen -= chunk;
             } while (ulPartLen > 0);
@@ -2660,7 +2848,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_VerifyUpdate)
                 status = sss_digest_update(&pxSessionObj->digest_ctx, pPart + offset, chunk);
                 ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-                if ((UINT_MAX - offset) < chunk) {
+                if ((SIZE_MAX - offset) < chunk) {
                     goto exit;
                 }
                 offset += chunk;
@@ -2684,6 +2872,9 @@ exit:
         if (pxSessionObj->ctx_hmac.session != NULL) {
             sss_mac_context_free(&pxSessionObj->ctx_hmac);
         }
+    }
+    if (object.keyStore) {
+        sss_key_object_free(&object);
     }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
@@ -2735,14 +2926,12 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetSessionInfo)
 {
     LOG_D("%s", __FUNCTION__);
     CK_RV xResult            = CKR_SESSION_CLOSED;
-    P11SessionPtr_t pSession = NULL;
+    P11SessionPtr_t pSession = prvSessionPointerFromHandle(hSession);
     CK_FLAGS ro_flags        = CKF_SERIAL_SESSION;
 
     ENSURE_OR_RETURN_ON_ERROR(NULL != pInfo, CKR_ARGUMENTS_BAD);
-    ENSURE_OR_RETURN_ON_ERROR(hSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
 
     ENSURE_OR_RETURN_ON_ERROR(hSession > 0, CKR_SESSION_HANDLE_INVALID);
-    pSession = pkcs11_sessions[hSession - 1];
     ENSURE_OR_RETURN_ON_ERROR(pSession != NULL, CKR_SESSION_HANDLE_INVALID);
 
     if (sss_pkcs11_mutex_lock() != 0) {
@@ -2846,12 +3035,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_SetPIN)
  */
 CK_DEFINE_FUNCTION(CK_RV, C_CloseAllSessions)(CK_SLOT_ID slotID)
 {
+    AX_UNUSED_ARG(slotID);
     LOG_D("%s", __FUNCTION__);
-    ENSURE_OR_RETURN_ON_ERROR(slotID == pkcs11SLOT_ID, CKR_SLOT_ID_INVALID);
-    C_CloseSession(1);
-    C_CloseSession(2);
-    C_CloseSession(3);
-    return CKR_OK;
+    return CKR_FUNCTION_NOT_SUPPORTED;
 }
 
 /**

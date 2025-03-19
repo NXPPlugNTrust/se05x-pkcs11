@@ -1,5 +1,5 @@
 #
-# Copyright 2023-2024 NXP
+# Copyright 2023-2025 NXP
 # SPDX-License-Identifier: Apache-2.0
 #
 """
@@ -148,8 +148,12 @@ def main():
     run("%s --module %s --sign --mechanism RSA-PKCS --id EF00000A --input-file %sout_sh256 -o %sout_sh256.sign" % (pkcs11_tool, module_path, output_dir, output_dir))
     log.info("###################################################")
 
+    log.info("Convert key DER to PEM")
+    run("openssl pkey -pubin -in %s%s_0xEF00000A_public_ossl.key -inform DER -outform PEM -out %s%sopenssl_key.pem"%(output_dir, args.key_type.split(":")[1], output_dir,args.key_type.split(":")[1]))
+    log.info("###################################################")
+
     log.info("Doing verify with openssl")
-    run("openssl pkeyutl -verify -pubin -inkey %s%s_0xEF00000A_public_ossl.key -in %sout_sh256  -sigfile %sout_sh256.sign > %sverify_logs"%(output_dir, args.key_type.split(":")[1], output_dir, output_dir, output_dir))
+    run("openssl pkeyutl -verify -pubin -inkey %s%sopenssl_key.pem -in %sout_sh256  -sigfile %sout_sh256.sign > %sverify_logs"%(output_dir, args.key_type.split(":")[1], output_dir, output_dir, output_dir))
     log.info("###################################################")
 
     log.info("Parsing the ossl result")

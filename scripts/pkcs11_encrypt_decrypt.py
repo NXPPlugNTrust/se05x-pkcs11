@@ -1,5 +1,5 @@
 #
-# Copyright 2024 NXP
+# Copyright 2024-2025 NXP
 # SPDX-License-Identifier: Apache-2.0
 #
 
@@ -12,6 +12,7 @@ import sys
 from pkcs11_utils import *
 
 OPENSC_UNSUPPORTED_VERSION = "0.23.0"
+OPENSC_ENCRYPT_UNSUPPORTED = "0.20.0"
 
 def read_from_file(filename, binary=False):
 
@@ -49,6 +50,10 @@ def main():
         os.mkdir(output_dir)
 
     opensc_version = get_opensc_version().strip()
+
+    if OPENSC_ENCRYPT_UNSUPPORTED in opensc_version:
+            log.info("encryption is not supported for opensc version %s"%(OPENSC_ENCRYPT_UNSUPPORTED))
+            return
 
     log.info("Generating symmetric key: aes:16.. (Generates random data and set key)")
     run("%s --module %s --keygen --key-type aes:16 --label sss:0xEF00000D" % (pkcs11_tool, module_path))

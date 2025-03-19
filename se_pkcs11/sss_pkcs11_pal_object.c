@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024 NXP
+ * Copyright 2021,2024-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -66,6 +66,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_DestroyObject)
 
     xResult = CKR_OK;
 exit:
+    if (object.keyStore) {
+        sss_key_object_free(&object);
+    }
+
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
     }
@@ -89,10 +93,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     CK_ULONG classIndex             = 0;
     size_t buff_len                 = sizeof(buff);
     CK_ULONG keyidindex;
-    CK_ULONG labelIndex = 0;
+    CK_ULONG labelIndex   = 0;
     CK_ULONG ecParamIndex = 0;
     CK_ULONG keyTypeIndex = 0;
-    CK_BBOOL foundKeyId = CK_FALSE;
+    CK_BBOOL foundKeyId   = CK_FALSE;
     sss_status_t status;
     sss_cipher_type_t cipherType = kSSS_CipherType_RSA;
     sss_key_part_t keyPart       = kSSS_KeyPart_NONE;
@@ -113,7 +117,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     /*
      * Check parameters.
      */
-    ENSURE_OR_RETURN_ON_ERROR(xSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
     ENSURE_OR_RETURN_ON_ERROR(pkcs11CREATEOBJECT_MINIMUM_ATTRIBUTE_COUNT <= ulCount, CKR_TEMPLATE_INCOMPLETE);
     ENSURE_OR_RETURN_ON_ERROR(pxTemplate != NULL, CKR_ARGUMENTS_BAD);
@@ -121,8 +124,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     ENSURE_OR_RETURN_ON_ERROR(ulCount != (CK_ULONG)-1, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(sss_pkcs11_mutex_lock() == 0, CKR_CANT_LOCK);
 
-    ENSURE_OR_RETURN_ON_ERROR(
+    ENSURE_OR_EXIT_WITH_STATUS_ON_ERROR(
         pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_CLASS, &classIndex) == CKR_OK,
+        xResult,
         CKR_TEMPLATE_INCOMPLETE);
 
     /*Find the key id as it's needed while provisiong keys and certificate*/
@@ -195,13 +199,15 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
             }
         }
 
-        ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_KEY_TYPE, &keyTypeIndex) == CKR_OK);
+        ENSURE_OR_GO_EXIT(
+            pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_KEY_TYPE, &keyTypeIndex) == CKR_OK);
 
         ENSURE_OR_GO_EXIT((pxTemplate[keyTypeIndex].ulValueLen) <= sizeof(key_type));
         memcpy(&key_type, pxTemplate[keyTypeIndex].pValue, pxTemplate[keyTypeIndex].ulValueLen);
 
-        if (key_type == CKK_EC){
-            ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_EC_PARAMS, &ecParamIndex) == CKR_OK);
+        if (key_type == CKK_EC) {
+            ENSURE_OR_GO_EXIT(
+                pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_EC_PARAMS, &ecParamIndex) == CKR_OK);
 
             ENSURE_OR_GO_EXIT((pxTemplate[ecParamIndex].ulValueLen) <= ecParamLen);
             memcpy(ecParam, pxTemplate[ecParamIndex].pValue, pxTemplate[ecParamIndex].ulValueLen);
@@ -211,7 +217,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
             keyParse.cipherType = cipherType;
         }
 
-        if ((keyParse.cipherType == kSSS_CipherType_EC_NIST_P) || (keyParse.cipherType == kSSS_CipherType_EC_NIST_K) || (keyParse.cipherType == kSSS_CipherType_EC_BRAINPOOL)){
+        if ((keyParse.cipherType == kSSS_CipherType_EC_NIST_P) || (keyParse.cipherType == kSSS_CipherType_EC_NIST_K) ||
+            (keyParse.cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
             keyPart = kSSS_KeyPart_Private;
         }
         else {
@@ -247,12 +254,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
                     CKR_OK);
             }
         }
-        ENSURE_OR_GO_EXIT(pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_KEY_TYPE, &keyTypeIndex) == CKR_OK);
+        ENSURE_OR_GO_EXIT(
+            pkcs11_get_attribute_parameter_index(pxTemplate, ulCount, CKA_KEY_TYPE, &keyTypeIndex) == CKR_OK);
 
         ENSURE_OR_GO_EXIT((pxTemplate[keyTypeIndex].ulValueLen) <= sizeof(key_type));
         memcpy(&key_type, pxTemplate[keyTypeIndex].pValue, pxTemplate[keyTypeIndex].ulValueLen);
 
-        if (key_type == CKK_EC){
+        if (key_type == CKK_EC) {
             ENSURE_OR_GO_EXIT((keyParse.buffLen) <= ecParamLen);
             ecParamLen = keyParse.buffLen;
             memcpy(ecParam, keyParse.pbuff, ecParamLen);
@@ -360,7 +368,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
                 LOG_W("Keylength used:%lu", keyLen);
                 break;
             default:
-                LOG_E("Key_type 0x%X is not supported", key_type);
+                LOG_E("Key_type 0x%08X is not supported", key_type);
                 xResult = CKR_ARGUMENTS_BAD;
                 goto exit;
             }
@@ -394,7 +402,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     default:
         goto exit;
     }
-    xResult              = CKR_OK;
+    xResult = CKR_OK;
 exit:
     if (sss_rng_ctx.session != NULL) {
         sss_rng_context_free(&sss_rng_ctx);
@@ -534,7 +542,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
     }
     else if ((false == xDone) && pxSession->keyIdPresent) /* If find object is with key id */
     {
-        keyId = (uint32_t)((pxSession->keyId[0] << (8 * 3)) | (pxSession->keyId[1] << (8 * 2)) | (pxSession->keyId[2] << (8 * 1)) | (pxSession->keyId[3] << (8 * 0)));
+        keyId               = (uint32_t)((pxSession->keyId[0] << (8 * 3)) | (pxSession->keyId[1] << (8 * 2)) |
+                           (pxSession->keyId[2] << (8 * 1)) | (pxSession->keyId[3] << (8 * 0)));
         sss_object_t object = {0};
 
         if (pxSession->xFindObjectTotalFound == 1) {
@@ -564,13 +573,14 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
     }
     else {
         static uint32_t object_list[MAX_CACHE_OBJECT] = {0};
-        static size_t object_list_size   = MAX_CACHE_OBJECT;
-        size_t ulMaxObjectCountTmp       = ulMaxObjectCount;
-        size_t total_objs_reads          = 0;
+        static size_t object_list_size                = MAX_CACHE_OBJECT;
+        size_t ulMaxObjectCountTmp                    = ulMaxObjectCount;
+        size_t total_objs_reads                       = 0;
 
         do {
             if (total_objs_reads >= MAX_CACHE_OBJECT) {
-                return CKR_FUNCTION_FAILED;
+                xResult = CKR_FUNCTION_FAILED;
+                goto exit;
             }
 
             object_list_size = MAX_CACHE_OBJECT - total_objs_reads;
@@ -580,7 +590,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
             if (sm_status != SM_OK) {
                 *pulObjectCount = 0;
                 xDone           = true;
-                return CKR_FUNCTION_FAILED;
+                xResult         = CKR_FUNCTION_FAILED;
+                goto exit;
             }
 
             total_objs_reads                   = total_objs_reads + object_list_size;
@@ -658,7 +669,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
                     (ptr_object->cipherType == kSSS_CipherType_RSA_CRT && pxSession->xFindObjectKeyType == CKK_RSA) ||
                     (ptr_object->cipherType == kSSS_CipherType_EC_NIST_P && pxSession->xFindObjectKeyType == CKK_EC) ||
                     (ptr_object->cipherType == kSSS_CipherType_EC_NIST_K && pxSession->xFindObjectKeyType == CKK_EC) ||
-                    (ptr_object->cipherType == kSSS_CipherType_EC_BRAINPOOL && pxSession->xFindObjectKeyType == CKK_EC)) {
+                    (ptr_object->cipherType == kSSS_CipherType_EC_BRAINPOOL &&
+                        pxSession->xFindObjectKeyType == CKK_EC)) {
                     memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
                     (*pulObjectCount)++;
                 }
@@ -683,9 +695,11 @@ CK_DEFINE_FUNCTION(CK_RV, C_FindObjects)
                         (ptr_object->cipherType == kSSS_CipherType_RSA_CRT &&
                             pxSession->xFindObjectKeyType == CKK_RSA) ||
                         (ptr_object->cipherType == kSSS_CipherType_EC_NIST_P &&
-                            pxSession->xFindObjectKeyType == CKK_EC)  ||
-                        (ptr_object->cipherType == kSSS_CipherType_EC_NIST_K && pxSession->xFindObjectKeyType == CKK_EC) ||
-                        (ptr_object->cipherType == kSSS_CipherType_EC_BRAINPOOL && pxSession->xFindObjectKeyType == CKK_EC)) {
+                            pxSession->xFindObjectKeyType == CKK_EC) ||
+                        (ptr_object->cipherType == kSSS_CipherType_EC_NIST_K &&
+                            pxSession->xFindObjectKeyType == CKK_EC) ||
+                        (ptr_object->cipherType == kSSS_CipherType_EC_BRAINPOOL &&
+                            pxSession->xFindObjectKeyType == CKK_EC)) {
                         memcpy(&ckObjects[*pulObjectCount], &id, sizeof(id));
                         (*pulObjectCount)++;
                     }
@@ -816,7 +830,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
 
         keyLen = *((size_t *)pTemplate[attributeIndex].pValue);
         if ((keyLen != 16) && (keyLen != 24) && (keyLen != 32)) {
-            LOG_E("Unsupported key length %d", keyLen);
+            LOG_E("Unsupported key length %lu", keyLen);
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
@@ -841,7 +855,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
 
         keyLen = *((size_t *)pTemplate[attributeIndex].pValue);
         if ((keyLen != 16) && (keyLen != 24) && (keyLen != 32)) {
-            LOG_E("Unsupported key length %d", keyLen);
+            LOG_E("Unsupported key length %lu", keyLen);
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
@@ -861,13 +875,14 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
             /* CKA_ID was also not provided. Generate a random keyId */
             xResult = pkcs11_label_to_keyId((unsigned char *)"", 0, &keyId);
             if (xResult != CKR_OK) {
-                return xResult;
+                goto exit;
             }
         }
         else {
             /* CKA_ID is provided. Use as keyID */
             memcpy(keyIdBuff, pTemplate[attributeIndex].pValue, sizeof(keyIdBuff));
-            keyId = (uint32_t)((keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
+            keyId = (uint32_t)(
+                (keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
         }
     }
     else {
@@ -980,7 +995,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
         rsaKeyGen = CK_TRUE;
         break;
     default:
-        return CKR_MECHANISM_INVALID;
+        xResult = CKR_MECHANISM_INVALID;
+        goto exit;
     }
 
     if (ecKeyGen) {
@@ -989,7 +1005,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
         xResult                  = pkcs11_get_attribute_parameter_index(
             pPublicKeyTemplate, ulPublicKeyAttributeCount, CKA_EC_PARAMS, &ec_params_index);
         if (xResult != CKR_OK) {
-            return xResult;
+            goto exit;
         }
 
         if (pPublicKeyTemplate[ec_params_index].ulValueLen > sizeof(ec_params)) {
@@ -998,19 +1014,25 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
         }
         memcpy(ec_params, pPublicKeyTemplate[ec_params_index].pValue, pPublicKeyTemplate[ec_params_index].ulValueLen);
         /* Get the ciphertype based on passed OID */
-        if (pkcs11_get_ec_info(ec_params, &KeyBitLen, &cipherType) == 0){
+        if (pkcs11_get_ec_info(ec_params, &KeyBitLen, &cipherType) == 0) {
             goto cont;
         }
-
-        return CKR_ARGUMENTS_BAD;
+        else {
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
+        }
     }
     else if (rsaKeyGen) {
         CK_ULONG rsa_params_index = 0;
-        cipherType                = kSSS_CipherType_RSA;
-        xResult                   = pkcs11_get_attribute_parameter_index(
+#if defined(PKCS11_ENABLE_RSA_KEY_GEN_CRT)
+        cipherType = kSSS_CipherType_RSA_CRT;
+#else
+        cipherType = kSSS_CipherType_RSA;
+#endif
+        xResult = pkcs11_get_attribute_parameter_index(
             pPublicKeyTemplate, ulPublicKeyAttributeCount, CKA_MODULUS_BITS, &rsa_params_index);
         if (xResult != CKR_OK) {
-            return xResult;
+            goto exit;
         }
 
         CK_ULONG modulusBits = 0;
@@ -1021,7 +1043,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKeyPair)
 
         if ((KeyBitLen != 1024) && (KeyBitLen != 2048) && (KeyBitLen != 3072) && (KeyBitLen != 4096) &&
             (KeyBitLen != 512)) {
-            return CKR_ARGUMENTS_BAD;
+            xResult = CKR_ARGUMENTS_BAD;
+            goto exit;
         }
     }
 
@@ -1037,13 +1060,14 @@ cont:
             /* CKA_ID was also not provided. Generate a random keyId */
             xResult = pkcs11_label_to_keyId((unsigned char *)"", 0, &privKeyId);
             if (xResult != CKR_OK) {
-                return xResult;
+                goto exit;
             }
         }
         else {
             /* CKA_ID is provided. Use as keyID */
             memcpy(keyIdBuff, pPrivateKeyTemplate[privateLabelIndex].pValue, sizeof(keyIdBuff));
-            privKeyId = (uint32_t)((keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
+            privKeyId = (uint32_t)(
+                (keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
         }
     }
     else {
@@ -1051,7 +1075,7 @@ cont:
             pPrivateKeyTemplate[privateLabelIndex].ulValueLen,
             &privKeyId);
         if (xResult != CKR_OK) {
-            return xResult;
+            goto exit;
         }
     }
 
@@ -1065,32 +1089,32 @@ cont:
             /* CKA_ID was also not provided. Generate a random keyId */
             xResult = pkcs11_label_to_keyId((unsigned char *)"", 0, &pubKeyId);
             if (xResult != CKR_OK) {
-                return xResult;
+                goto exit;
             }
         }
         else {
             /* CKA_ID is provided. Use as keyID */
             memcpy(keyIdBuff, pPrivateKeyTemplate[privateLabelIndex].pValue, sizeof(keyIdBuff));
-            pubKeyId = (uint32_t)((keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
+            pubKeyId = (uint32_t)(
+                (keyIdBuff[0] << 8 * 3) | (keyIdBuff[1] << 8 * 2) | (keyIdBuff[2] << 8 * 1) | (keyIdBuff[3] << 8 * 0));
         }
     }
     else {
         xResult = pkcs11_label_to_keyId(
             pPublicKeyTemplate[publicLabelIndex].pValue, pPublicKeyTemplate[publicLabelIndex].ulValueLen, &pubKeyId);
         if (xResult != CKR_OK) {
-            return xResult;
+            goto exit;
         }
     }
     /* Checking and deleting the key if already present */
 
     if (SM_OK == Se05x_API_CheckObjectExists(&se05x_session->s_ctx, privKeyId, &IdExists)) {
-        if ((IdExists == kSE05x_Result_SUCCESS) &&
-            (ecKeyGen || rsaKeyGen)) {
+        if ((IdExists == kSE05x_Result_SUCCESS) && (ecKeyGen || rsaKeyGen)) {
             LOG_W("Key id 0x%X already exists!!", privKeyId);
             if (SM_OK != Se05x_API_DeleteSecureObject(&se05x_session->s_ctx, privKeyId)) {
                 LOG_E("Se05x_API_DeleteSecureObject Failed !!");
                 xResult = CKR_FUNCTION_FAILED;
-                return xResult;
+                goto exit;
             }
             else {
                 LOG_D("Successfully deleted the key!!");
@@ -1100,7 +1124,7 @@ cont:
     else {
         LOG_E("Se05x_API_CheckObjectExists Failed !!");
         xResult = CKR_FUNCTION_FAILED;
-        return xResult;
+        goto exit;
     }
 
     if (pubKeyId == privKeyId) {
@@ -1254,7 +1278,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
         uint16_t outKeyIndex = 0;
         size_t pubKeyLen;
         char label[80];
-        uint32_t keyId = 0;
+        uint32_t keyId                       = 0;
         uint8_t keyIdBuff[MAX_KEY_ID_LENGTH] = {0};
 #if SSS_HAVE_SE05X_VER_GTE_07_02
         uint8_t ObjType     = 0x00;
@@ -1406,6 +1430,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 break;
             }
             case kSSS_CipherType_RSA:
+            case kSSS_CipherType_RSA_CRT:
             case kSSS_CipherType_EC_NIST_P:
             case kSSS_CipherType_EC_NIST_K:
             case kSSS_CipherType_EC_BRAINPOOL: {
@@ -1496,8 +1521,10 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
 
             if (((pxTemplate[iAttrib].type == CKA_MODULUS_BITS) && (sss_object.cipherType != kSSS_CipherType_RSA_CRT &&
                                                                        sss_object.cipherType != kSSS_CipherType_RSA)) ||
-                ((pxTemplate[iAttrib].type == CKA_PRIME_BITS) && (sss_object.cipherType != kSSS_CipherType_EC_NIST_P &&
-                sss_object.cipherType != kSSS_CipherType_EC_NIST_K && sss_object.cipherType != kSSS_CipherType_EC_BRAINPOOL))) {
+                ((pxTemplate[iAttrib].type == CKA_PRIME_BITS) &&
+                    (sss_object.cipherType != kSSS_CipherType_EC_NIST_P &&
+                        sss_object.cipherType != kSSS_CipherType_EC_NIST_K &&
+                        sss_object.cipherType != kSSS_CipherType_EC_BRAINPOOL))) {
                 xResult = CKR_ARGUMENTS_BAD;
                 break;
             }
@@ -1585,7 +1612,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 xResult      = CKR_FUNCTION_FAILED;
                 break;
             }
-            if ((sss_object.cipherType == kSSS_CipherType_EC_NIST_P) || (sss_object.cipherType == kSSS_CipherType_EC_NIST_K) ||
+            if ((sss_object.cipherType == kSSS_CipherType_EC_NIST_P) ||
+                (sss_object.cipherType == kSSS_CipherType_EC_NIST_K) ||
                 (sss_object.cipherType == kSSS_CipherType_EC_BRAINPOOL)) {
 #if SSS_HAVE_SE05X_VER_GTE_07_02
                 if (SM_OK != Se05x_API_ReadObjectAttributes(&se05x_session->s_ctx, sss_object.keyId, data, &dataLen)) {
@@ -1652,8 +1680,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Secp160k1:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Secp160k1:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Secp160k1:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_SECP160K1, sizeof(OID_EC_GRP_SECP160K1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_SECP160K1, sizeof(OID_EC_GRP_SECP160K1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_SECP160K1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_SECP160K1) + 1;
@@ -1692,8 +1719,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool160:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool160:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool160:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP160R1, sizeof(OID_EC_GRP_BP160R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP160R1, sizeof(OID_EC_GRP_BP160R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP160R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP160R1) + 1;
@@ -1702,8 +1728,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool192:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool192:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool192:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP192R1, sizeof(OID_EC_GRP_BP192R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP192R1, sizeof(OID_EC_GRP_BP192R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP192R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP192R1) + 1;
@@ -1712,8 +1737,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool224:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool224:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool224:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP224R1, sizeof(OID_EC_GRP_BP224R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP224R1, sizeof(OID_EC_GRP_BP224R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP224R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP224R1) + 1;
@@ -1722,8 +1746,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool256:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool256:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool256:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP256R1, sizeof(OID_EC_GRP_BP256R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP256R1, sizeof(OID_EC_GRP_BP256R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP256R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP256R1) + 1;
@@ -1732,8 +1755,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool320:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool320:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool320:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP320R1, sizeof(OID_EC_GRP_BP320R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP320R1, sizeof(OID_EC_GRP_BP320R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP320R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP320R1) + 1;
@@ -1742,8 +1764,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool384:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool384:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool384:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP384R1, sizeof(OID_EC_GRP_BP384R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP384R1, sizeof(OID_EC_GRP_BP384R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP384R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP384R1) + 1;
@@ -1752,8 +1773,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 case kSE05x_SecObjTyp_EC_KEY_PAIR_Brainpool512:
                 case kSE05x_SecObjTyp_EC_PRIV_KEY_Brainpool512:
                 case kSE05x_SecObjTyp_EC_PUB_KEY_Brainpool512:
-                    memcpy(
-                        &ecParam[2], (uint8_t *)OID_EC_GRP_BP512R1, sizeof(OID_EC_GRP_BP512R1) - 1);
+                    memcpy(&ecParam[2], (uint8_t *)OID_EC_GRP_BP512R1, sizeof(OID_EC_GRP_BP512R1) - 1);
                     ecParam[0]   = tag;
                     ecParam[1]   = sizeof(OID_EC_GRP_BP512R1) - 1;
                     ulAttrLength = sizeof(OID_EC_GRP_BP512R1) + 1;
@@ -1774,9 +1794,9 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
                 }
 #else
                 LOG_E("Curve type not supported hence unable to get EC Params");
-                pvAttr       = NULL;
+                pvAttr = NULL;
                 ulAttrLength = 0;
-                xResult      = CKR_DEVICE_ERROR;
+                xResult = CKR_DEVICE_ERROR;
 
 #endif //SSS_HAVE_SE05X_VER_GTE_07_02
             }

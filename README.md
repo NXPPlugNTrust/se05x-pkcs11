@@ -8,7 +8,7 @@ the following functionality can be made available over the pkcs11 (version 2.40)
   - EC sign/verify
   - ECDH compute key
 - RSA crypto (RSA 1024, 2048, 3072, 4096)
-  - RSA key generation (Plain Key)
+  - RSA key generation (Plain/CRT Key)
   - RSA sign/verify
 - Random generator
 - Object import/delete/export (public part) of:
@@ -23,8 +23,13 @@ the following functionality can be made available over the pkcs11 (version 2.40)
 
 .. note::
 
-    The multi-step operations of ECDSA Sign/Verify, RSA Sign/Verify, HMAC, all will
+    1. The multi-step operations of ECDSA Sign/Verify, RSA Sign/Verify, HMAC, all will
     use the host crypto for multi-step digest operations of large input data.
+
+    2. RSA key generation will be with Plain type by default. Compile the library with define `PKCS11_ENABLE_RSA_KEY_GEN_CRT`
+    to change RSA key generation to CRT type.
+
+    3. For HKDF operation, by default the derived key is stored in SE05x. To store the key on host, change PKCS11_USE_HOST_KS_HKDF to 1 in file sss_pkcs11_pal_core.c.
 
 
 The SSS PKCS11 library here is tested with OpenSC pkcs11 tool.

@@ -1,6 +1,21 @@
 # Changelog
 
 
+## [4.8]
+
+- HKDF support added for PKCS11 specification version greater than or equal to 3.x
+
+- RSA_CRT support added for RSA key generation, sign/verify. (compile with PKCS11_ENABLE_RSA_KEY_GEN_CRT cmake option for CRT. By default plain RSA is enabled)
+
+- Fixes for static analysis findings.
+
+- Fixes for memory leaks.
+
+- Global TLS context initialization is removed as cloud example doesn't have dependency on TLS context
+
+- PKCS11 session handling clean up to support only single session
+
+
 ## [4.7]
 
 - **Breaking:** KeyID Handling: CKA_ID attribute (--id) passed is treated as byte array to avoid byte swapping. ID can be passed without changing the endianness now.

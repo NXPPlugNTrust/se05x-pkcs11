@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024 NXP
+ * Copyright 2021,2024-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -57,11 +57,10 @@
 #define ENABLE_OBJECT_CACHE 0
 #endif
 
+#define EX_SSS_BOOT_DO_ERASE 0
+
 /* ********************** Global variables ********************** */
 extern ex_sss_boot_ctx_t *pex_sss_demo_boot_ctx;
-#if SSS_PKCS11_ENABLE_CLOUD_DEMO
-extern ex_sss_cloud_ctx_t *pex_sss_demo_tls_ctx;
-#endif
 
 extern const uint8_t ecc_der_header_secp192[];
 extern const uint8_t ecc_der_header_secp224[];
@@ -101,7 +100,6 @@ extern size_t const der_ecc_bp512r1_header_len;
 #define MAX_CACHE_OBJECT 300
 #define AES_BLOCK_SIZE 16
 #define DES_BLOCK_SIZE 8
-#define MAX_PKCS11_SESSIONS 3
 #define PKCS11_TOKEN_LABEL                               \
     {                                                    \
         'S', 'S', 'S', '_', 'P', 'K', 'C', 'S', '1', '1' \
@@ -113,7 +111,7 @@ extern size_t const der_ecc_bp512r1_header_len;
 #define PKCS11_LIBRARY_VERSION  \
     (CK_VERSION)                \
     {                           \
-        .major = 4, .minor = 7, \
+        .major = 4, .minor = 8, \
     }
 #define CKA_SSS_ID CKA_VENDOR_DEFINED + CKA_OBJECT_ID
 /**
@@ -377,7 +375,13 @@ sss_status_t pkcs11_sss_create_token(sss_key_store_t *keystore,
     U32 bitLen);
 
 CK_RV pkcs11_get_ec_info(uint8_t *params, size_t *KeyBitLen, sss_cipher_type_t *cipher);
-CK_RV pkcs11_add_ec_header(uint16_t keySize, sss_cipher_type_t cipher, uint8_t *pubKeyBuf, size_t *pubKeyBufLen, CK_BYTE_PTR pubData, CK_ULONG pubDataLen, size_t *keyBitLen);
+CK_RV pkcs11_add_ec_header(uint16_t keySize,
+    sss_cipher_type_t cipher,
+    uint8_t *pubKeyBuf,
+    size_t *pubKeyBufLen,
+    CK_BYTE_PTR pubData,
+    CK_ULONG pubDataLen,
+    size_t *keyBitLen);
 
 /* Mutex handling function */
 int sss_pkcs11_mutex_init(void);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024 NXP
+ * Copyright 2021,2024-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -89,8 +89,9 @@ CK_RV pkcs11_se05x_symmetric_encrypt(P11SessionPtr_t pxSessionObj,
     status = sss_cipher_update(&symmCtx, (const uint8_t *)pData, (size_t)ulDataLen, pOut, &tempOutBufLen);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-    pOut          = pOut + tempOutBufLen;
-    encDataLen    = tempOutBufLen;
+    pOut       = pOut + tempOutBufLen;
+    encDataLen = tempOutBufLen;
+    ENSURE_OR_GO_EXIT(sizeof(encData) >= tempOutBufLen);
     tempOutBufLen = sizeof(encData) - tempOutBufLen;
 
     status = sss_cipher_finish(&symmCtx, NULL, 0, pOut, &tempOutBufLen);
@@ -114,6 +115,9 @@ CK_RV pkcs11_se05x_symmetric_encrypt(P11SessionPtr_t pxSessionObj,
 exit:
     if (symmCtx.session != NULL) {
         sss_symmetric_context_free(&symmCtx);
+    }
+    if (symmObject.keyStore) {
+        sss_key_object_free(&symmObject);
     }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
@@ -201,8 +205,9 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
         sss_cipher_update(&symmCtx, (const uint8_t *)pEncryptedData, (size_t)ulEncryptedDataLen, pOut, &tempOutBufLen);
     ENSURE_OR_GO_EXIT(status == kStatus_SSS_Success);
 
-    pOut          = pOut + tempOutBufLen;
-    encDataLen    = tempOutBufLen;
+    pOut       = pOut + tempOutBufLen;
+    encDataLen = tempOutBufLen;
+    ENSURE_OR_GO_EXIT(sizeof(encData) >= tempOutBufLen);
     tempOutBufLen = sizeof(encData) - tempOutBufLen;
 
     status = sss_cipher_finish(&symmCtx, NULL, 0, pOut, &tempOutBufLen);
@@ -232,6 +237,9 @@ CK_RV pkcs11_se05x_symmetric_decrypt(P11SessionPtr_t pxSessionObj,
 exit:
     if (symmCtx.session != NULL) {
         sss_symmetric_context_free(&symmCtx);
+    }
+    if (symmObject.keyStore) {
+        sss_key_object_free(&symmObject);
     }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 NXP
+ * Copyright 2023,2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,9 +13,6 @@
 /* ********************** Defines ********************** */
 #define ERR_BASE64_BUFFER_TOO_SMALL -0x002A  /**< Output buffer too small. */
 #define ERR_BASE64_INVALID_CHARACTER -0x002C /**< Invalid character in input. */
-
-/* Enable cloud demos in standard package testing */
-#define SSS_PKCS11_ENABLE_CLOUD_DEMO 0
 
 /**
  * DER constants

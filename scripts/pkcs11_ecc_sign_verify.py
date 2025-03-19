@@ -1,5 +1,5 @@
 #
-# Copyright 2023-2024 NXP
+# Copyright 2023-2025 NXP
 # SPDX-License-Identifier: Apache-2.0
 #
 """
@@ -49,17 +49,17 @@ def main():
     elif "secp256k1" in args.key_type:
         ossl_key_type = "secp256k1"
     elif "brainpoolP192r1" in args.key_type:
-        ossl_key_type = "brainpoolp192r1"
+        ossl_key_type = "brainpoolP192r1"
     elif "brainpoolP224r1" in args.key_type:
-        ossl_key_type = "brainpoolp224r1"
+        ossl_key_type = "brainpoolP224r1"
     elif "brainpoolP256r1" in args.key_type:
-        ossl_key_type = "brainpoolp256r1"
+        ossl_key_type = "brainpoolP256r1"
     elif "brainpoolP320r1" in args.key_type:
-        ossl_key_type = "brainpoolp320r1"
+        ossl_key_type = "brainpoolP320r1"
     elif "brainpoolP384r1" in args.key_type:
-        ossl_key_type = "brainpoolp384r1"
+        ossl_key_type = "brainpoolP384r1"
     elif "brainpoolP512r1" in args.key_type:
-        ossl_key_type = "brainpoolp512r1"
+        ossl_key_type = "brainpoolP512r1"
 
     log.info("Generating keypair: %s" % (args.key_type))
     run("%s --module %s --keypairgen --key-type  %s --label sss:0xEF000001" % (pkcs11_tool, module_path, args.key_type))
@@ -184,8 +184,12 @@ def main():
 
     convert_raw_to_asn1(raw_sign_file, encoded_sign)
 
+    log.info("Convert key DER to PEM")
+    run("openssl pkey -pubin -in %s%s_0xEF00000A_public_ossl.key -inform DER -outform PEM -out %s%sopenssl_key.pem"%(output_dir, args.key_type.split(":")[1], output_dir,args.key_type.split(":")[1]))
+    log.info("###################################################")
+
     log.info("Doing verify with openssl")
-    run("openssl pkeyutl -verify -pubin -inkey %s%s_0xEF00000A_public_ossl.key -in %sout_sh256  -sigfile %sout_sign.txt > %sverify_logs"%(output_dir, args.key_type.split(":")[1], output_dir, output_dir, output_dir))
+    run("openssl pkeyutl -verify -pubin -inkey %s%sopenssl_key.pem -in %sout_sh256  -sigfile %sout_sign.txt > %sverify_logs"%(output_dir, args.key_type.split(":")[1], output_dir, output_dir, output_dir))
     log.info("###################################################")
 
     log.info("Parsing the ossl result")

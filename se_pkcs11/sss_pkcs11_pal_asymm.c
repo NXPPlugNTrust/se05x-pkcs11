@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024 NXP
+ * Copyright 2021,2024-2025 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -23,7 +23,7 @@
 */
 CK_RV pkcs11_setASNTLV(uint8_t tag, uint8_t *component, const size_t componentLen, uint8_t *key, size_t *keyLen)
 {
-    if (componentLen <= 0) {
+    if ((componentLen <= 0) || (*keyLen <= 0)) {
         return CKR_ARGUMENTS_BAD;
     }
 
@@ -94,15 +94,15 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
 
     len = signature[index++];
     if ((len & 0x80) == 0x80) {
-        if ((len & 0x7F) == 0x01){
+        if ((len & 0x7F) == 0x01) {
             index = index + 1;
         }
-        else if((len & 0x7F) == 0x02) {
+        else if ((len & 0x7F) == 0x02) {
             index = index + 2;
         }
     }
 
-    if (index > *sigLen){
+    if (index > *sigLen) {
         goto exit;
     }
     if (signature[index++] != 0x02) {
@@ -111,15 +111,15 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
 
     len = signature[index++];
 
-    if ((len & 0x42) == 0x42){
-        if ((signature[index]) == 0x00){
+    if ((len & 0x42) == 0x42) {
+        if ((signature[index]) == 0x00) {
             len--;
             index++;
         }
     }
 
     if (len & 0x01) {
-        if ((signature[index]) == 0x00){
+        if ((signature[index]) == 0x00) {
             len--;
             index++;
         }
@@ -135,15 +135,15 @@ CK_RV pkcs11_ecSignatureToRandS(uint8_t *signature, size_t *sigLen)
 
     len = signature[index++];
 
-    if ((len & 0x42) == 0x42){
-        if ((signature[index]) == 0x00){
+    if ((len & 0x42) == 0x42) {
+        if ((signature[index]) == 0x00) {
             len--;
             index++;
         }
     }
 
     if (len & 0x01) {
-        if ((signature[index]) == 0x00){
+        if ((signature[index]) == 0x00) {
             len--;
             index++;
         }
@@ -180,7 +180,7 @@ exit:
 CK_RV pkcs11_ecRandSToSignature(uint8_t *rands, const size_t rands_len, uint8_t *output, size_t *outputLen)
 {
     CK_RV xResult          = CKR_FUNCTION_FAILED;
-    uint8_t signature[256] = {0};
+    uint8_t signature[260] = {0};
     size_t signatureLen    = sizeof(signature);
     size_t componentLen    = (rands_len) / 2;
     uint8_t tag            = ASN_TAG_INT;
@@ -190,24 +190,24 @@ CK_RV pkcs11_ecRandSToSignature(uint8_t *rands, const size_t rands_len, uint8_t 
 
     ENSURE_OR_GO_EXIT(rands_len <= MAX_RAW_SIGNATURE_SIZE);
     /* secp521r1 case */
-    if (rands_len >= 130){
+    if (rands_len >= 130) {
         /* case 1: s length is 66 bytes and r length is 65 bytes */
-        if ((rands_len == 131) && (rands[componentLen] == 0x01)){
+        if ((rands_len == 131) && (rands[componentLen] == 0x01)) {
             s_len = componentLen + 1;
             r_len = componentLen;
         }
         /* case 2: s length is 65 bytes and r length is 66 bytes */
-        else if ((rands_len == 131) && (rands[0] == 0x01)){
+        else if ((rands_len == 131) && (rands[0] == 0x01)) {
             r_len = componentLen + 1;
             s_len = componentLen;
         }
         /* case 3: s length is 66 bytes and r length is 64 bytes */
-        else if((rands_len == 130) && (rands[componentLen - 1] == 0x01)){
+        else if ((rands_len == 130) && (rands[componentLen - 1] == 0x01)) {
             s_len = componentLen + 1;
             r_len = componentLen - 1;
         }
         /* case 3: s length is 64 bytes and r length is 66 bytes */
-        else if((rands_len == 130) && (rands[0] == 0x01)){
+        else if ((rands_len == 130) && (rands[0] == 0x01)) {
             r_len = componentLen + 1;
             s_len = componentLen - 1;
         }
@@ -400,20 +400,20 @@ CK_RV pkcs11_ecPublickeyGetEcParams(uint8_t *input, size_t *inputLen)
         if ((len & 0x7F) == 0x01) {
             ENSURE_OR_GO_EXIT((index + 2) <= sizeof(data) - 1);
             len = data[index + 2];
-            ENSURE_OR_GO_EXIT((UINT_MAX - 1) >= len);
+            ENSURE_OR_GO_EXIT((SIZE_MAX - 1) >= len);
             len++;
         }
         else if ((len & 0x7F) == 0x02) {
             ENSURE_OR_GO_EXIT((index + 3) <= sizeof(data) - 1);
             len = (data[index + 2] << 8) | data[index + 3];
-            ENSURE_OR_GO_EXIT((UINT_MAX - 2) >= len);
+            ENSURE_OR_GO_EXIT((SIZE_MAX - 2) >= len);
             len = len + 2;
         }
     }
 
-    ENSURE_OR_GO_EXIT((UINT_MAX - 2) >= len);
+    ENSURE_OR_GO_EXIT((SIZE_MAX - 2) >= len);
     len = len + 2;
-    ENSURE_OR_GO_EXIT((UINT_MAX - index) >= (size_t)len);
+    ENSURE_OR_GO_EXIT((SIZE_MAX - index) >= (size_t)len);
 
     if ((index + len) > *inputLen) {
         xResult = CKR_FUNCTION_FAILED;
@@ -495,6 +495,9 @@ exit:
     if (asymmCtx.session != NULL) {
         sss_asymmetric_context_free(&asymmCtx);
     }
+    if (sss_object.keyStore) {
+        sss_key_object_free(&sss_object);
+    }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
     }
@@ -558,6 +561,9 @@ CK_RV pkcs11_se05x_asymmetric_decrypt(P11SessionPtr_t pxSessionObj,
 exit:
     if (asymmCtx.session != NULL) {
         sss_asymmetric_context_free(&asymmCtx);
+    }
+    if (sss_object.keyStore) {
+        sss_key_object_free(&sss_object);
     }
     if (sss_pkcs11_mutex_unlock() != 0) {
         return CKR_FUNCTION_FAILED;
