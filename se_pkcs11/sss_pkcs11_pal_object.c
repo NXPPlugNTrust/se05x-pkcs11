@@ -1,5 +1,5 @@
 /*
- * Copyright 2021,2024-2025 NXP
+ * Copyright 2021,2024-2026 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -117,6 +117,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_CreateObject)
     /*
      * Check parameters.
      */
+    ENSURE_OR_RETURN_ON_ERROR(xSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
     ENSURE_OR_RETURN_ON_ERROR(pkcs11CREATEOBJECT_MINIMUM_ATTRIBUTE_COUNT <= ulCount, CKR_TEMPLATE_INCOMPLETE);
     ENSURE_OR_RETURN_ON_ERROR(pxTemplate != NULL, CKR_ARGUMENTS_BAD);
@@ -828,7 +829,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
         ENSURE_OR_GO_EXIT(
             pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_VALUE_LEN, &attributeIndex) == CKR_OK);
 
-        keyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        keyLen = *((CK_ULONG *)pTemplate[attributeIndex].pValue);
         if ((keyLen != 16) && (keyLen != 24) && (keyLen != 32)) {
             LOG_E("Unsupported key length %lu", keyLen);
             xResult = CKR_ARGUMENTS_BAD;
@@ -853,7 +854,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateKey)
         ENSURE_OR_GO_EXIT(
             pkcs11_get_attribute_parameter_index(pTemplate, ulCount, CKA_VALUE_LEN, &attributeIndex) == CKR_OK);
 
-        keyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        keyLen = *((CK_ULONG *)pTemplate[attributeIndex].pValue);
         if ((keyLen != 16) && (keyLen != 24) && (keyLen != 32)) {
             LOG_E("Unsupported key length %lu", keyLen);
             xResult = CKR_ARGUMENTS_BAD;
@@ -1503,7 +1504,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetAttributeValue)
             }
             size         = (size_t)outKeyIndex;
             pvAttr       = (void *)&size;
-            ulAttrLength = sizeof(size_t);
+            ulAttrLength = sizeof(CK_ULONG);
             break;
         }
         case CKA_MODULUS_BITS:

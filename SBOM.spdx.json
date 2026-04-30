@@ -1,0 +1,154 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "creationInfo": {
+    "created": "2026-04-23T09:05:59Z",
+    "creators": [
+      "Organization: NXP"
+    ],
+    "licenseListVersion": "3.26"
+  },
+  "name": "se05x-pkcs11-v4.9",
+  "dataLicense": "CC0-1.0",
+  "hasExtractedLicensingInfos": [
+    {
+      "name": "OASIS Standards License",
+      "licenseId": "LicenseRef-e121ad44-e488-4a93-8203-589ba273e857",
+      "extractedText": "NONE"
+    }
+  ],
+  "documentNamespace": "https://nxp.com/spdx/1803b5c2-5c13-433c-bf5a-c9998f77af52",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52",
+      "name": "se05x-pkcs11",
+      "versionInfo": "v4.9",
+      "licenseConcluded": "(Apache-2.0)",
+      "licenseDeclared": "(Apache-2.0)",
+      "downloadLocation": "https://github.com/NXPPlugNTrust/se05x-pkcs11",
+      "originator": "Organization: NXP",
+      "supplier": "NOASSERTION",
+      "externalRefs": [],
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---62cbf2cc-5049-472b-9195-825b789b30ca",
+      "name": "mbed TLS",
+      "versionInfo": "2.26.0",
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "homepage": "https://www.trustedfirmware.org/",
+      "downloadLocation": "NOASSERTION",
+      "originator": "Organization: armmbed",
+      "supplier": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "OTHER",
+          "referenceLocator": "23c721f7-9b11-4c5f-ac86-ea2cfb906b60",
+          "referenceType": "BlackDuck-ComponentOrigin"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:arm:mbed_tls:2.26.0:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:arm:mbed_tls:2.26.0:-:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:arm_ltd:mbedtls_formerly_polarssl:2.26.0:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:mbed:mbedtls:2.26.0:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceLocator": "cpe:2.3:a:polarssl:polarssl:2.26.0:*:*:*:*:*:*:*",
+          "referenceType": "cpe23Type"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:github/armmbed/mbedtls@mbedtls-2.26.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---a72f87ac-8e82-448a-9300-139a8ff8dc1b",
+      "name": "oasis-tcs/pkcs11",
+      "versionInfo": "2-40-errata-1",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "LicenseRef-e121ad44-e488-4a93-8203-589ba273e857",
+      "licenseComments": "As per the reviewed license list Oasis is not a license. For pkcs11 MIT License is the correct one",
+      "downloadLocation": "NOASSERTION",
+      "originator": "Organization: oasis-tcs",
+      "supplier": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "OTHER",
+          "referenceLocator": "207a767a-31b8-4736-a57b-b4cc98384a18",
+          "referenceType": "BlackDuck-ComponentOrigin"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:github/oasis-tcs/pkcs11@2-40-errata-1",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false
+    },
+    {
+      "SPDXID": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---7dcd6a4c-a2dc-4ea2-bd93-c0b08d1fbf31",
+      "name": "pyauth/python-pkcs11",
+      "versionInfo": "v0.6.0",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "homepage": "https://github.com/pyauth/python-pkcs11",
+      "downloadLocation": "NOASSERTION",
+      "originator": "Organization: pyauth",
+      "supplier": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "OTHER",
+          "referenceLocator": "82605fff-a3ed-4b7e-9a6c-a5fec82bd0ae",
+          "referenceType": "BlackDuck-ComponentOrigin"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:github/pyauth/python-pkcs11@v0.6.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52"
+    },
+    {
+      "spdxElementId": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---62cbf2cc-5049-472b-9195-825b789b30ca"
+    },
+    {
+      "spdxElementId": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---7dcd6a4c-a2dc-4ea2-bd93-c0b08d1fbf31"
+    },
+    {
+      "spdxElementId": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-package-1803b5c2-5c13-433c-bf5a-c9998f77af52---a72f87ac-8e82-448a-9300-139a8ff8dc1b"
+    }
+  ]
+}

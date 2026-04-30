@@ -100,6 +100,7 @@ extern size_t const der_ecc_bp512r1_header_len;
 #define MAX_CACHE_OBJECT 300
 #define AES_BLOCK_SIZE 16
 #define DES_BLOCK_SIZE 8
+#define MAX_PKCS11_SESSIONS 1
 #define PKCS11_TOKEN_LABEL                               \
     {                                                    \
         'S', 'S', 'S', '_', 'P', 'K', 'C', 'S', '1', '1' \
@@ -111,7 +112,7 @@ extern size_t const der_ecc_bp512r1_header_len;
 #define PKCS11_LIBRARY_VERSION  \
     (CK_VERSION)                \
     {                           \
-        .major = 4, .minor = 8, \
+        .major = 4, .minor = 9, \
     }
 #define CKA_SSS_ID CKA_VENDOR_DEFINED + CKA_OBJECT_ID
 /**

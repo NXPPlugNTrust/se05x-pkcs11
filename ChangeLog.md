@@ -1,6 +1,12 @@
 # Changelog
 
 
+## [4.9]
+
+- simw_lib updated to v04.08.00
+
+- Fixes for static analysis findings.
+
 ## [4.8]
 
 - HKDF support added for PKCS11 specification version greater than or equal to 3.x

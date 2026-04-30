@@ -51,6 +51,7 @@ bool cryptokiInitialized = false;
 bool mutex_initialised   = false;
 CK_RV pkcs11_read_object_size(uint32_t keyId, uint16_t *keyLen);
 static uint8_t pkcs11_check_if_keyId_exists(uint32_t keyId, pSe05xSession_t session_ctx);
+static P11SessionPtr_t pkcs11_sessions[MAX_PKCS11_SESSIONS] = {0};
 
 /**
  * @brief PKCS#11 interface functions implemented by this Cryptoki module.
@@ -130,7 +131,10 @@ CK_FUNCTION_LIST prvP11FunctionList = {{CRYPTOKI_VERSION_MAJOR, CRYPTOKI_VERSION
  */
 P11SessionPtr_t prvSessionPointerFromHandle(CK_SESSION_HANDLE xSession)
 {
-    return (P11SessionPtr_t)(uintptr_t)xSession;
+    if ((xSession == 0) || (xSession > MAX_PKCS11_SESSIONS)) {
+        return NULL;
+    }
+    return pkcs11_sessions[xSession - 1];
 }
 
 /**
@@ -431,6 +435,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GenerateRandom)
     sss_rng_context_t sss_rng_ctx = {0};
 
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
+    ENSURE_OR_RETURN_ON_ERROR(xSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
 
     if (NULL == pucRandomData) {
         return CKR_ARGUMENTS_BAD;
@@ -1057,6 +1062,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
     AX_UNUSED_ARG(xNotify);
     CK_RV xResult                = CKR_FUNCTION_FAILED;
     P11SessionPtr_t pxSessionObj = NULL;
+    bool foundEmptySessionSlot   = false;
+    size_t i                     = 0;
 
     LOG_D("%s", __FUNCTION__);
 
@@ -1092,11 +1099,21 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
     pxSessionObj->xOpened = CK_TRUE;
     pxSessionObj->xFlags  = xFlags;
 
-    /*
-    * Return the session.
-    */
+    for (i = 0; i < MAX_PKCS11_SESSIONS; i++) {
+        if (pkcs11_sessions[i] == NULL) {
+            foundEmptySessionSlot = true;
+            break;
+        }
+    }
 
-    *pxSession = (CK_SESSION_HANDLE)(uintptr_t)pxSessionObj;
+    if (foundEmptySessionSlot == true) {
+        pkcs11_sessions[i] = pxSessionObj;
+        *pxSession         = (CK_SESSION_HANDLE)(i + 1); // To skip session_id 0
+    }
+    else {
+        xResult = CKR_DEVICE_MEMORY;
+        goto exit;
+    }
 
     pxSessionObj->xOperationInProgress = pkcs11NO_OPERATION;
 
@@ -1110,9 +1127,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_OpenSession)
         sss_status_t sss_status = kStatus_SSS_Fail;
         char *portName          = NULL;
 
-#if defined(T1oI2C)
-        SM_Close(NULL, 0);
-#endif
         /* If portname is given in ENV */
         sss_status = ex_sss_boot_connectstring(0, NULL, &portName);
         ENSURE_OR_GO_EXIT(sss_status == kStatus_SSS_Success);
@@ -1202,6 +1216,8 @@ CK_DEFINE_FUNCTION(CK_RV, C_CloseSession)(CK_SESSION_HANDLE xSession)
 #else
     SSS_FREE(pxSession);
 #endif
+
+    pkcs11_sessions[xSession - 1] = NULL;
 
 #ifdef PKCS11_SESSION_OPEN
 
@@ -1320,6 +1336,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_DecryptInit)
     ENSURE_OR_RETURN_ON_ERROR(pMechanism != NULL, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(pxSession->xOperationInProgress == pkcs11NO_OPERATION, CKR_OPERATION_ACTIVE);
 
+    if ((pMechanism->mechanism == CKM_AES_CBC || pMechanism->mechanism == CKM_AES_CTR ||
+        pMechanism->mechanism == CKM_DES_CBC || pMechanism->mechanism == CKM_DES3_CBC) &&
+        (pMechanism->ulParameterLen % 8 != 0)) {
+        pxSession->xOperationInProgress = pkcs11NO_OPERATION;
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
     status = pkcs11_get_validated_sss_object(pxSession, hKey, &obj);
     if (status != kStatus_SSS_Success) {
         pxSession->xOperationInProgress = pkcs11NO_OPERATION;
@@ -1327,10 +1350,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_DecryptInit)
     }
     pxSession->xOperationInProgress = pMechanism->mechanism;
 
-    if (pMechanism->ulParameterLen % 8 != 0) {
-        pxSession->xOperationInProgress = pkcs11NO_OPERATION;
-        return CKR_MECHANISM_PARAM_INVALID;
-    }
     pxSession->xOperationKeyHandle = hKey;
     if (pMechanism->pParameter) {
         pxSession->mechParameter    = pMechanism->pParameter;
@@ -1384,7 +1403,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
     CK_MECHANISM_TYPE mechType         = 0;
     size_t KeyBitLen                   = 0;
     sss_cipher_type_t sharedObjCipher  = kSSS_CipherType_NONE;
-    size_t keyByteLen                  = 0;
+    CK_ULONG keyByteLen                = 0;
 #if SSS_HAVE_SE05X_VER_GTE_07_02
     uint8_t derived_key_dummy[256] = {1, 2, 3};
     uint8_t derivedSessionKey[256] = {0};
@@ -1474,7 +1493,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
             xResult,
             CKR_ARGUMENTS_BAD);
 
-        keyByteLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        keyByteLen = *((CK_ULONG *)pTemplate[attributeIndex].pValue);
 
         if ((sharedObjCipher == kSSS_CipherType_AES) &&
             ((keyByteLen != 16) && (keyByteLen != 24) && (keyByteLen != 32))) {
@@ -1483,7 +1502,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
             goto exit;
         }
 
-        derivedKeyLen = keyByteLen;
+        derivedKeyLen = (size_t) keyByteLen;
 
         if (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_LABEL, &attributeIndex) != CKR_OK) {
             /* Label not passed. Create random keyID */
@@ -1631,12 +1650,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
 
         if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
                 CKR_OK) ||
-            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)) {
+            (*((CK_ULONG *)pTemplate[attributeIndex].pValue) == 0)) {
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        keyByteLen = *((CK_ULONG *)pTemplate[attributeIndex].pValue);
+        derivedKeyLen = (size_t) keyByteLen;
 
         if (derivedKeyLen > MAX_PBKDF_REQ_LEN) {
             xResult = CKR_ARGUMENTS_BAD;
@@ -1791,12 +1811,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_DeriveKey)
 
         if ((pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_VALUE_LEN, &attributeIndex) !=
                 CKR_OK) ||
-            (*((size_t *)pTemplate[attributeIndex].pValue) == 0)) {
+            (*((CK_ULONG *)pTemplate[attributeIndex].pValue) == 0)) {
             xResult = CKR_ARGUMENTS_BAD;
             goto exit;
         }
 
-        derivedKeyLen = *((size_t *)pTemplate[attributeIndex].pValue);
+        keyByteLen = *((CK_ULONG *)pTemplate[attributeIndex].pValue);
+        derivedKeyLen = (size_t) keyByteLen;
 
         if (pkcs11_get_attribute_parameter_index(pTemplate, ulAttributeCount, CKA_LABEL, &attributeIndex) != CKR_OK) {
             /* Label not passed */
@@ -2110,6 +2131,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_EncryptInit)
     ENSURE_OR_RETURN_ON_ERROR(pMechanism != NULL, CKR_ARGUMENTS_BAD);
     ENSURE_OR_RETURN_ON_ERROR(pxSession->xOperationInProgress == pkcs11NO_OPERATION, CKR_OPERATION_ACTIVE);
 
+    if ((pMechanism->mechanism == CKM_AES_CBC || pMechanism->mechanism == CKM_AES_CTR ||
+        pMechanism->mechanism == CKM_DES_CBC || pMechanism->mechanism == CKM_DES3_CBC) &&
+        (pMechanism->ulParameterLen % 8 != 0)) {
+        pxSession->xOperationInProgress = pkcs11NO_OPERATION;
+        return CKR_MECHANISM_PARAM_INVALID;
+    }
+
     status = pkcs11_get_validated_sss_object(pxSession, hKey, &obj);
     if (status != kStatus_SSS_Success) {
         pxSession->xOperationInProgress = pkcs11NO_OPERATION;
@@ -2117,10 +2145,6 @@ CK_DEFINE_FUNCTION(CK_RV, C_EncryptInit)
     }
     pxSession->xOperationInProgress = pMechanism->mechanism;
 
-    if (pMechanism->ulParameterLen % 8 != 0) {
-        pxSession->xOperationInProgress = pkcs11NO_OPERATION;
-        return CKR_MECHANISM_PARAM_INVALID;
-    }
     pxSession->xOperationKeyHandle = hKey;
     if (pMechanism->pParameter) {
         pxSession->mechParameter    = pMechanism->pParameter;
@@ -2469,6 +2493,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_SeedRandom)
     AX_UNUSED_ARG(ulSeedLen);
     LOG_D("%s", __FUNCTION__);
     ENSURE_OR_RETURN_ON_ERROR(cryptokiInitialized == 1, CKR_CRYPTOKI_NOT_INITIALIZED);
+    ENSURE_OR_RETURN_ON_ERROR(hSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(pSeed != NULL, CKR_ARGUMENTS_BAD);
     /* Nothing is done */
     return CKR_OK;
@@ -2930,6 +2955,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetSessionInfo)
     CK_FLAGS ro_flags        = CKF_SERIAL_SESSION;
 
     ENSURE_OR_RETURN_ON_ERROR(NULL != pInfo, CKR_ARGUMENTS_BAD);
+    ENSURE_OR_RETURN_ON_ERROR(hSession <= MAX_PKCS11_SESSIONS, CKR_SESSION_HANDLE_INVALID);
 
     ENSURE_OR_RETURN_ON_ERROR(hSession > 0, CKR_SESSION_HANDLE_INVALID);
     ENSURE_OR_RETURN_ON_ERROR(pSession != NULL, CKR_SESSION_HANDLE_INVALID);

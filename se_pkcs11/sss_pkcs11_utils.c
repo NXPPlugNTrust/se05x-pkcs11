@@ -182,6 +182,7 @@ int sss_pkcs11_mutex_init(void)
     if (pkcs11_mutex == NULL) {
         return 1;
     }
+    return 0;
 #elif (__GNUC__ && !AX_EMBEDDED)
     {
         int ret = EBUSY;
@@ -191,11 +192,16 @@ int sss_pkcs11_mutex_init(void)
         if (ret != 0) {
             return 1;
         }
+        return 0;
+    }
+#elif (_MSC_VER)
+    {
+        return 0;
     }
 #else
-    LOG_W("sss_pkcs11_mutex_init not implemented \n");
+   LOG_W("sss_pkcs11_mutex_init not implemented \n");
+   return 1;
 #endif
-    return 0;
 }
 
 /**
@@ -217,6 +223,10 @@ int sss_pkcs11_mutex_lock(void)
         pkcs11_lock_flag = 1;
     }
     return ret;
+#elif (_MSC_VER)
+    {
+    return 0;
+    }
 #else
     LOG_W("sss_pkcs11_mutex_lock not implemented \n");
     return 1;
@@ -245,6 +255,10 @@ int sss_pkcs11_mutex_unlock(void)
         return 0;
     }
     return 1;
+#elif (_MSC_VER)
+    {
+    return 0;
+    }
 #else
     LOG_W("sss_pkcs11_mutex_unlock not implemented \n");
     return 1;
@@ -265,6 +279,10 @@ int sss_pkcs11_mutex_destroy(void)
         return 0;
     }
     return 1;
+#elif (_MSC_VER)
+    {
+    return 0;
+    }
 #else
     LOG_W("sss_pkcs11_mutex_destroy not implemented \n");
     return 1;

@@ -15,6 +15,7 @@ import sys
 import traceback
 import binascii
 import sys
+import platform
 
 logging.basicConfig(format='%(message)s', level=logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -40,11 +41,14 @@ cur_dir = os.path.abspath(os.path.dirname(__file__))
 # Update the library name here
 library_name="libsss_pkcs11.so"
 module_path=os.path.join('..','build',library_name)
+
 pkcs11_tool="pkcs11-tool"
 input_dir = cur_dir + os.sep + "input_data" + os.sep
 output_dir = cur_dir + os.sep + "output" + os.sep
 key_dir = cur_dir + os.sep + "keys" + os.sep
 OPENSC = "opensc-tool"
+
+
 
 SUPPORTED_KEY_TYPES = [
     "EC:prime192v1",
